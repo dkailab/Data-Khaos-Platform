@@ -9,6 +9,10 @@ import com.datakhaos.common.model.R;
 import com.datakhaos.common.model.ResultCode;
 import com.datakhaos.common.security.MetadataHolder;
 import com.datakhaos.common.security.SqlAuditUtil;
+import com.datakhaos.common.security.rewrite.SqlRewriteEngine;
+import com.datakhaos.common.security.rewrite.SqlRewriteEngine.ColumnPolicy;
+import com.datakhaos.common.security.rewrite.SqlRewriteEngine.RewriteResult;
+import com.datakhaos.common.security.rewrite.SqlRewriteEngine.RowPolicy;
 import com.datakhaos.datasource.api.connector.DatasourceApiClient;
 import com.datakhaos.datasource.api.model.ColumnInfo;
 import com.datakhaos.datasource.api.model.QueryResult;
@@ -495,12 +499,15 @@ public class VisualService {
         // 2. 参数解析 ${param}
         sql = resolveParams(sql, request.getParams());
 
-        // 3. 表权限校验（超级管理员跳过）
+        // 3. 行/列权限 SQL 改写
+        sql = applyPermissionRewrite(sql, userId);
+
+        // 4. 表权限校验（超级管理员跳过）
         if (adhocPermissionCheck && !MetadataHolder.isSuperAdmin() && StrUtil.isNotBlank(userId)) {
             checkTablePermission(request.getDatasourceId(), sql, userId);
         }
 
-        // 4. 执行 + 记录历史
+        // 5. 执行 + 记录历史
         long start = System.currentTimeMillis();
         try {
             R<QueryResult> result = datasourceApiClient.executeRaw(request.getDatasourceId(), sql);
@@ -598,6 +605,59 @@ public class VisualService {
     private static final Pattern FROM_PATTERN = Pattern.compile(
             "\\bFROM\\s+([a-zA-Z_][\\w$]*(?:\\.[a-zA-Z_][\\w$]*)*)",
             Pattern.CASE_INSENSITIVE);
+
+    /** 提取 FROM/JOIN 后的所有表名 */
+    private static final Pattern TABLE_PATTERN = Pattern.compile(
+            "\\b(?:FROM|JOIN)\\s+([a-zA-Z_][\\w$]*(?:\\.[a-zA-Z_][\\w$]*)*)",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 权限 SQL 改写：提取 SQL 中所有表名，逐表查询行/列策略并改写。
+     * 超级管理员、无策略或未登录时直接返回原 SQL。
+     */
+    private String applyPermissionRewrite(String sql, String userId) {
+        if (StrUtil.isBlank(sql) || StrUtil.isBlank(userId) || MetadataHolder.isSuperAdmin()) {
+            return sql;
+        }
+        try {
+            Set<String> tables = extractTableNames(sql);
+            if (tables.isEmpty()) return sql;
+
+            var userPerm = permissionApiClient.getUserPermission(userId);
+            List<RowPolicy> rowPolicies = new ArrayList<>();
+            List<ColumnPolicy> columnPolicies = new ArrayList<>();
+            for (String table : tables) {
+                rowPolicies.addAll(permissionApiClient.getRowPolicies(userId, userPerm, table));
+                columnPolicies.addAll(permissionApiClient.getColumnPolicies(userId, userPerm, table));
+            }
+
+            if (rowPolicies.isEmpty() && columnPolicies.isEmpty()) return sql;
+
+            RewriteResult result = SqlRewriteEngine.rewrite(sql, rowPolicies, columnPolicies);
+            if (result.isChanged()) {
+                log.info("[visual] SQL 改写生效 tables={} rows={} cols={}",
+                        tables, result.getAppliedRows().size(), result.getAppliedColumns().size());
+                return result.getSql();
+            }
+        } catch (Exception e) {
+            log.warn("[visual] SQL 权限改写异常，使用原始 SQL: {}", e.getMessage());
+        }
+        return sql;
+    }
+
+    /** 从 SQL 中提取 FROM/JOIN 涉及的表名（剥离 schema 前缀） */
+    private Set<String> extractTableNames(String sql) {
+        Set<String> tables = new java.util.LinkedHashSet<>();
+        Matcher matcher = TABLE_PATTERN.matcher(sql);
+        while (matcher.find()) {
+            String table = matcher.group(1);
+            if (StrUtil.isNotBlank(table)) {
+                int dot = table.lastIndexOf('.');
+                tables.add(dot >= 0 ? table.substring(dot + 1) : table);
+            }
+        }
+        return tables;
+    }
 
     private void saveAdhocHistory(AdhocQueryRequest request, String userId, String sql,
                                    int status, long costMs, int rowCount, String error) {

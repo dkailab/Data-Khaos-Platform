@@ -5,6 +5,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.datakhaos.common.exception.BusinessException;
 import com.datakhaos.datasource.api.connector.DatasourceApiClient;
+import com.datakhaos.mart.api.model.DimensionDto;
+import com.datakhaos.mart.api.model.MetricDto;
+import com.datakhaos.mart.api.service.MartApiClient;
 import com.datakhaos.visual.dto.AdhocExecuteResponse;
 import com.datakhaos.visual.dto.AdhocQueryRequest;
 import com.datakhaos.visual.dto.DatasetChartQueryRequest;
@@ -37,6 +40,7 @@ public class DatasetService {
     private final VisualDatasetMapper datasetMapper;
     private final VisualService visualService;
     private final DatasourceApiClient datasourceApiClient;
+    private final MartApiClient martApiClient;
     private final ObjectMapper objectMapper;
 
     private static final String STATUS_DRAFT = "DRAFT";
@@ -151,11 +155,55 @@ public class DatasetService {
     }
 
     /**
-     * 根据模型自动提取字段定义
+     * 根据模型自动提取字段定义：将模型的指标（METRIC）和维度（DIMENSION）转化为数据集字段列表。
+     * 优先通过 MartApiClient 拉取；失败时返回空列表（不阻断主流程）。
      */
     public List<DatasetDto.DatasetFieldDto> extractFieldsFromModel(String modelId) {
-        // TODO: 根据模型关联的指标和维度自动生成字段列表
-        return new ArrayList<>();
+        if (StrUtil.isBlank(modelId)) {
+            return new ArrayList<>();
+        }
+        List<DatasetDto.DatasetFieldDto> fields = new ArrayList<>();
+        try {
+            // 拉取维度
+            List<DimensionDto> dimensions = martApiClient.listDimensions(modelId);
+            int order = 1;
+            for (DimensionDto dim : dimensions) {
+                DatasetDto.DatasetFieldDto f = new DatasetDto.DatasetFieldDto();
+                f.setId(dim.getId());
+                f.setFieldCode(dim.getDimCode());
+                f.setFieldName(dim.getDimName());
+                f.setFieldType("DIMENSION");
+                f.setDataType(mapDimDataType(dim.getDimType()));
+                f.setSortOrder(order++);
+                fields.add(f);
+            }
+            // 拉取指标
+            List<MetricDto> metrics = martApiClient.listMetrics(modelId);
+            for (MetricDto m : metrics) {
+                DatasetDto.DatasetFieldDto f = new DatasetDto.DatasetFieldDto();
+                f.setId(m.getId());
+                f.setFieldCode(m.getMetricCode());
+                f.setFieldName(m.getMetricName());
+                f.setFieldType("METRIC");
+                f.setDataType(m.getDataType() != null ? m.getDataType() : "DECIMAL");
+                f.setAggType(inferAggType(m.getMetricType()));
+                f.setSortOrder(order++);
+                fields.add(f);
+            }
+        } catch (Exception e) {
+            // 静默处理，不阻断主流程
+        }
+        return fields;
+    }
+
+    private String mapDimDataType(String dimType) {
+        if ("TIME".equalsIgnoreCase(dimType)) return "DATE";
+        return "STRING";
+    }
+
+    private String inferAggType(String metricType) {
+        if ("DERIVED".equalsIgnoreCase(metricType)) return "SUM";
+        return "SUM";
     }
 
     private void copyToEntity(DatasetDto dto, VisualDataset entity) {

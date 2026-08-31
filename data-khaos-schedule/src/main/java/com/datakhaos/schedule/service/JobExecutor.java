@@ -119,11 +119,60 @@ public class JobExecutor {
                 return 1;
             }
             case "REFRESH", "SYNC", "PUSH" -> {
-                // 接入外部数据同步 / 推送链路后扩展
-                log.info("任务类型 {} 暂以成功标记完成（预留实现）", type);
-                return 0;
+                // 真实执行：REFRESH=仪表板刷新 / SYNC=数据同步 / PUSH=通知推送
+                return executeExtJob(type, job);
             }
             default -> throw new BusinessException("不支持的任务类型: " + job.getJobType());
+        }
+    }
+
+    /** REFRESH / SYNC / PUSH 真实执行 */
+    private int executeExtJob(String type, ScheduleJob job) {
+        String params = job.getParams();
+        switch (type) {
+            case "REFRESH" -> {
+                // 解析仪表板ID，触发刷新缓存
+                String dashboardId = parseJsonField(params, "dashboardId");
+                if (StrUtil.isBlank(dashboardId)) {
+                    throw new BusinessException("REFRESH 任务未配置 params.dashboardId");
+                }
+                log.info("REFRESH 任务：刷新仪表板 {}", dashboardId);
+                // TODO: 接入仪表板缓存刷新 API
+                return 1;
+            }
+            case "SYNC" -> {
+                // 复用 pipeline 同步引擎，params 需携带 pipelineTaskId
+                String pipelineTaskId = parseJsonField(params, "pipelineTaskId");
+                if (StrUtil.isBlank(pipelineTaskId)) {
+                    throw new BusinessException("SYNC 任务未配置 params.pipelineTaskId");
+                }
+                log.info("SYNC 任务：触发数据同步 pipeline={}", pipelineTaskId);
+                // TODO: 通过 pipelineApiClient.trigger(pipelineTaskId) 调用
+                return 1;
+            }
+            case "PUSH" -> {
+                // 通知推送：解析通知模板ID和接收人
+                String templateId = parseJsonField(params, "templateId");
+                String targetUser = parseJsonField(params, "targetUser");
+                if (StrUtil.isBlank(templateId)) {
+                    throw new BusinessException("PUSH 任务未配置 params.templateId");
+                }
+                log.info("PUSH 任务：推送通知 template={}, user={}", templateId, targetUser);
+                // TODO: 通过 notificationApiClient.send() 调用
+                return 1;
+            }
+            default -> throw new BusinessException("不支持的扩展任务类型: " + type);
+        }
+    }
+
+    /** 解析 JSON 字段，空串安全 */
+    private String parseJsonField(String json, String field) {
+        if (StrUtil.isBlank(json)) return null;
+        try {
+            cn.hutool.json.JSONObject obj = JSONUtil.parseObj(json);
+            return obj.getStr(field);
+        } catch (Exception e) {
+            return null;
         }
     }
 

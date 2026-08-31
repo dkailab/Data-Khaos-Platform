@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * 调度服务：任务 CRUD、启停、手动触发、执行日志与依赖管理。
@@ -134,9 +135,69 @@ public class ScheduleService {
     @Transactional(rollbackFor = Exception.class)
     public void saveDep(String jobId, ScheduleJobDep dep) {
         getJob(jobId);
+        // 校验被依赖任务存在
+        getJob(dep.getDepJobId());
+        // 防止自依赖
+        if (jobId.equals(dep.getDepJobId())) {
+            throw new BusinessException("任务不能依赖自身");
+        }
         dep.setJobId(jobId);
-        dep.setDepType(dep.getDepType() == null ? "HARD" : dep.getDepType());
+        dep.setDepType(dep.getDepType() == null ? "HARD" : dep.getDepType().toUpperCase());
+        // 防环检测
+        checkCycle(jobId, dep.getDepJobId());
         jobDepMapper.insert(dep);
+    }
+
+    /**
+     * 检查添加 jobId -> depJobId (jobId 依赖 depJobId) 这条边后是否会形成环。
+     * 从 jobId 出发沿已有依赖链向上游追溯，如果能到达 depJobId 则成环。
+     */
+    private void checkCycle(String jobId, String depJobId) {
+        // BFS 沿依赖边向上游追溯：jobId 依赖谁，再看被依赖的是否依赖 depJobId
+        Set<String> visited = new java.util.HashSet<>();
+        java.util.Queue<String> queue = new java.util.ArrayDeque<>();
+        queue.offer(jobId);
+        visited.add(jobId);
+        while (!queue.isEmpty()) {
+            String current = queue.poll();
+            // 查 current 的所有上游依赖
+            List<ScheduleJobDep> deps = jobDepMapper.selectList(
+                new LambdaQueryWrapper<ScheduleJobDep>()
+                    .eq(ScheduleJobDep::getJobId, current)
+            );
+            for (ScheduleJobDep edge : deps) {
+                String upstream = edge.getDepJobId();
+                if (depJobId.equals(upstream)) {
+                    throw new BusinessException("添加依赖会形成环路: " + depJobId + " -> ... -> " + jobId + " -> " + depJobId);
+                }
+                if (!visited.contains(upstream)) {
+                    visited.add(upstream);
+                    queue.offer(upstream);
+                }
+            }
+        }
+    }
+
+    /** 查询指定任务的所有上游依赖 */
+    public List<ScheduleJobDep> getUpstreamDeps(String jobId) {
+        return jobDepMapper.selectList(
+            new LambdaQueryWrapper<ScheduleJobDep>()
+                .eq(ScheduleJobDep::getJobId, jobId)
+                .orderByAsc(ScheduleJobDep::getCreateTime)
+        );
+    }
+
+    /** 校验所有上游依赖是否都已成功 */
+    public boolean allUpstreamSuccess(String jobId) {
+        List<ScheduleJobDep> deps = getUpstreamDeps(jobId);
+        if (deps.isEmpty()) return true;
+        for (ScheduleJobDep dep : deps) {
+            ScheduleJobLog lastLog = jobLogMapper.selectLastByJobId(dep.getDepJobId());
+            if (lastLog == null || lastLog.getStatus() == null || lastLog.getStatus() != 1) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Transactional(rollbackFor = Exception.class)

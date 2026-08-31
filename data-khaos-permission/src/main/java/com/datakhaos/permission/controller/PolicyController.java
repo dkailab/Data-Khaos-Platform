@@ -10,6 +10,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 /**
  * 行/列级数据权限策略管理
  */
@@ -73,5 +75,25 @@ public class PolicyController {
     public R<Void> deleteColumn(@PathVariable String id) {
         policyService.deleteColumn(id);
         return R.ok();
+    }
+
+    // ==================== 查询接口（供 SQL 改写引擎使用） ====================
+
+    @Operation(summary = "查询用户在指定表上的行级权限策略")
+    @GetMapping("/row/user-table")
+    public R<List<SysRowPolicy>> listRowPolicies(@RequestParam String targetTable,
+                                                  @RequestParam(required = false) String userId,
+                                                  @RequestParam(required = false) List<String> roleIds,
+                                                  @RequestParam(required = false) List<String> projectGroupIds) {
+        return R.ok(policyService.listRowPoliciesForUserTable(userId, roleIds, projectGroupIds, targetTable));
+    }
+
+    @Operation(summary = "查询用户在指定表上的列级权限策略")
+    @GetMapping("/column/user-table")
+    public R<List<SysColumnPolicy>> listColumnPolicies(@RequestParam String targetTable,
+                                                        @RequestParam(required = false) String userId,
+                                                        @RequestParam(required = false) List<String> roleIds,
+                                                        @RequestParam(required = false) List<String> projectGroupIds) {
+        return R.ok(policyService.listColumnPoliciesForUserTable(userId, roleIds, projectGroupIds, targetTable));
     }
 }

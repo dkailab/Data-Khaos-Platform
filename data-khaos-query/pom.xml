@@ -56,6 +56,7 @@
             <groupId>com.datakhaos</groupId>
             <artifactId>data-khaos-permission-api</artifactId>
         </dependency>
+        <!-- JSQLParser comes from mybatis-plus-bom, version aligned with MP 3.5.5 -->
     </dependencies>
 
     <build>

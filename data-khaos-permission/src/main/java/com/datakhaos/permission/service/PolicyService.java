@@ -10,6 +10,9 @@ import com.datakhaos.permission.mapper.SysRowPolicyMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * 行/列级数据权限策略管理
  */
@@ -62,5 +65,50 @@ public class PolicyService {
 
     public void deleteColumn(String id) {
         columnPolicyMapper.deleteById(id);
+    }
+
+    // ---------- 按用户+表查询策略（供 SQL 改写引擎使用） ----------
+
+    /**
+     * 查询用户在指定表上的行级权限策略列表。
+     * 匹配规则：userId 直接命中、或 projectGroupId 命中、或 roleId 命中任一角色。
+     */
+    public List<SysRowPolicy> listRowPoliciesForUserTable(String userId, List<String> roleIds, List<String> projectGroupIds, String tableName) {
+        if (StrUtil.isBlank(tableName)) return new ArrayList<>();
+        LambdaQueryWrapper<SysRowPolicy> wrapper = new LambdaQueryWrapper<SysRowPolicy>()
+                .eq(SysRowPolicy::getTargetTable, tableName)
+                .eq(SysRowPolicy::getStatus, 1)
+                .and(w -> {
+                    w.eq(StrUtil.isNotBlank(userId), SysRowPolicy::getUserId, userId);
+                    if (roleIds != null && !roleIds.isEmpty()) {
+                        w.in(SysRowPolicy::getRoleId, roleIds);
+                    }
+                    if (projectGroupIds != null && !projectGroupIds.isEmpty()) {
+                        w.in(SysRowPolicy::getProjectGroupId, projectGroupIds);
+                    }
+                })
+                .orderByDesc(SysRowPolicy::getCreateTime);
+        return rowPolicyMapper.selectList(wrapper);
+    }
+
+    /**
+     * 查询用户在指定表上的列级权限策略列表。
+     */
+    public List<SysColumnPolicy> listColumnPoliciesForUserTable(String userId, List<String> roleIds, List<String> projectGroupIds, String tableName) {
+        if (StrUtil.isBlank(tableName)) return new ArrayList<>();
+        LambdaQueryWrapper<SysColumnPolicy> wrapper = new LambdaQueryWrapper<SysColumnPolicy>()
+                .eq(SysColumnPolicy::getTargetTable, tableName)
+                .eq(SysColumnPolicy::getStatus, 1)
+                .and(w -> {
+                    w.eq(StrUtil.isNotBlank(userId), SysColumnPolicy::getUserId, userId);
+                    if (roleIds != null && !roleIds.isEmpty()) {
+                        w.in(SysColumnPolicy::getRoleId, roleIds);
+                    }
+                    if (projectGroupIds != null && !projectGroupIds.isEmpty()) {
+                        w.in(SysColumnPolicy::getProjectGroupId, projectGroupIds);
+                    }
+                })
+                .orderByDesc(SysColumnPolicy::getCreateTime);
+        return columnPolicyMapper.selectList(wrapper);
     }
 }

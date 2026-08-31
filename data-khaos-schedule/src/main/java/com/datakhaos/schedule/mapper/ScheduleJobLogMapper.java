@@ -14,4 +14,8 @@ public interface ScheduleJobLogMapper extends BaseMapper<ScheduleJobLog> {
     /** 任务最近一次开始时间 */
     @Select("SELECT MAX(start_time) FROM schedule_job_log WHERE job_id = #{jobId}")
     LocalDateTime selectLastStartTime(@Param("jobId") String jobId);
+
+    /** 任务最近一次执行日志 */
+    @Select("SELECT * FROM schedule_job_log WHERE job_id = #{jobId} ORDER BY start_time DESC, id DESC LIMIT 1")
+    ScheduleJobLog selectLastByJobId(@Param("jobId") String jobId);
 }

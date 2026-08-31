@@ -8,6 +8,10 @@ import com.datakhaos.common.exception.BusinessException;
 import com.datakhaos.common.model.PageResult;
 import com.datakhaos.common.model.ResultCode;
 import com.datakhaos.common.security.MetadataHolder;
+import com.datakhaos.common.security.rewrite.SqlRewriteEngine;
+import com.datakhaos.common.security.rewrite.SqlRewriteEngine.ColumnPolicy;
+import com.datakhaos.common.security.rewrite.SqlRewriteEngine.RewriteResult;
+import com.datakhaos.common.security.rewrite.SqlRewriteEngine.RowPolicy;
 import com.datakhaos.datasource.api.connector.DatasourceApiClient;
 import com.datakhaos.datasource.api.model.QueryResult;
 import com.datakhaos.mart.api.model.DimensionDto;
@@ -40,6 +44,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.ArrayList;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 数据集市服务：模型建模、指标/维度管理、关联关系与数据预览。
@@ -442,7 +449,7 @@ public class MartService {
         return detail;
     }
 
-    /** 预览模型数据：SELECT 事实表前 100 行 */
+    /** 预览模型数据：SELECT 事实表前 100 行，应用行/列权限改写 */
     public QueryResult preview(String id) {
         MartModel model = getModel(id);
         if (StrUtil.isBlank(model.getDatasourceId())) {
@@ -454,11 +461,87 @@ public class MartService {
         if (StrUtil.isBlank(factTable)) {
             throw new BusinessException("模型未配置事实表，无法预览");
         }
-        R<QueryResult> r = datasourceApiClient.executeRaw(model.getDatasourceId(), "SELECT * FROM " + factTable + " LIMIT 100");
+        String sql = "SELECT * FROM " + factTable + " LIMIT 100";
+        // 行/列权限改写
+        sql = applyPermissionRewrite(sql);
+        R<QueryResult> r = datasourceApiClient.executeRaw(model.getDatasourceId(), sql);
         if (r == null || r.getCode() != 0) {
             throw new BusinessException(r == null ? "预览失败" : r.getMsg());
         }
         return r.getData();
+    }
+
+    /**
+     * 查询指标样例数据（指标中心内嵌预览）。构建聚合 SQL 后执行，应用行/列权限改写。
+     */
+    public QueryResult previewMetric(String metricId) {
+        MartMetric metric = metricMapper.selectById(metricId);
+        if (metric == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "指标不存在: " + metricId);
+        }
+        getModel(metric.getModelId());
+        String sql = "SELECT " + metric.getMetricCode() + " FROM " + resolveFactTable(metric.getModelId()) + " LIMIT 100";
+        sql = applyPermissionRewrite(sql);
+        MartModel model = modelMapper.selectById(metric.getModelId());
+        R<QueryResult> r = datasourceApiClient.executeRaw(model.getDatasourceId(), sql);
+        if (r == null || r.getCode() != 0) {
+            throw new BusinessException(r == null ? "指标预览失败" : r.getMsg());
+        }
+        return r.getData();
+    }
+
+    private String resolveFactTable(String modelId) {
+        return modelRelMapper.selectList(new LambdaQueryWrapper<MartModelRel>()
+                        .eq(MartModelRel::getModelId, modelId))
+                .stream().map(MartModelRel::getFactTable).findFirst().orElseThrow(() -> new BusinessException("模型未配置事实表"));
+    }
+
+    /** 行/列权限 SQL 改写：针对当前用户上下文 */
+    private String applyPermissionRewrite(String sql) {
+        String userId = MetadataHolder.getUserId();
+        if (StrUtil.isBlank(sql) || StrUtil.isBlank(userId) || MetadataHolder.isSuperAdmin()) {
+            return sql;
+        }
+        try {
+            Set<String> tables = extractSimpleTables(sql);
+            if (tables.isEmpty()) return sql;
+
+            var userPerm = permissionApiClient.getUserPermission(userId);
+            List<RowPolicy> rowPolicies = new ArrayList<>();
+            List<ColumnPolicy> columnPolicies = new ArrayList<>();
+            for (String table : tables) {
+                rowPolicies.addAll(permissionApiClient.getRowPolicies(userId, userPerm, table));
+                columnPolicies.addAll(permissionApiClient.getColumnPolicies(userId, userPerm, table));
+            }
+            if (rowPolicies.isEmpty() && columnPolicies.isEmpty()) return sql;
+
+            RewriteResult result = SqlRewriteEngine.rewrite(sql, rowPolicies, columnPolicies);
+            if (result.isChanged()) {
+                log.info("[mart] SQL 改写生效 tables={} rows={} cols={}",
+                        tables, result.getAppliedRows().size(), result.getAppliedColumns().size());
+                return result.getSql();
+            }
+        } catch (Exception e) {
+            log.warn("[mart] SQL 权限改写异常，使用原始 SQL: {}", e.getMessage());
+        }
+        return sql;
+    }
+
+    private static final Pattern TABLE_PATTERN_MART = Pattern.compile(
+            "\\b(?:FROM|JOIN)\\s+([a-zA-Z_][\\w$]*(?:\\.[a-zA-Z_][\\w$]*)*)",
+            Pattern.CASE_INSENSITIVE);
+
+    private Set<String> extractSimpleTables(String sql) {
+        Set<String> tables = new java.util.LinkedHashSet<>();
+        Matcher matcher = TABLE_PATTERN_MART.matcher(sql);
+        while (matcher.find()) {
+            String table = matcher.group(1);
+            if (StrUtil.isNotBlank(table)) {
+                int dot = table.lastIndexOf('.');
+                tables.add(dot >= 0 ? table.substring(dot + 1) : table);
+            }
+        }
+        return tables;
     }
 
     // ==================== 私有方法 ====================

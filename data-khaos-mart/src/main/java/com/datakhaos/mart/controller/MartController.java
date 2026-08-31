@@ -3,7 +3,9 @@ package com.datakhaos.mart.controller;
 import com.datakhaos.common.model.PageResult;
 import com.datakhaos.common.model.R;
 import com.datakhaos.datasource.api.model.QueryResult;
+import com.datakhaos.mart.api.model.DimensionDto;
 import com.datakhaos.mart.api.model.MarketModelDto;
+import com.datakhaos.mart.api.model.MetricDto;
 import com.datakhaos.mart.dto.MartQueryRequest;
 import com.datakhaos.mart.dto.MartQueryResult;
 import com.datakhaos.mart.entity.MartDimLevel;
@@ -221,5 +223,19 @@ public class MartController {
     public R<Void> deleteRel(@PathVariable String id) {
         martService.deleteRel(id);
         return R.ok();
+    }
+
+    // ==================== 供下游服务调用的查询接口 ====================
+
+    @Operation(summary = "按模型ID查询指标列表（供 visual 等下游使用）")
+    @GetMapping("/query/metrics")
+    public R<List<MetricDto>> listMetrics(@RequestParam String modelId) {
+        return R.ok(martService.metricDtos(modelId));
+    }
+
+    @Operation(summary = "按模型ID查询维度列表（供 visual 等下游使用）")
+    @GetMapping("/query/dimensions")
+    public R<List<DimensionDto>> listDimensions(@RequestParam String modelId) {
+        return R.ok(martService.dimensionDtos(modelId));
     }
 }

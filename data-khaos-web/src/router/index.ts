@@ -71,6 +71,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/permission/table/TablePermissionList.vue'),
         meta: { title: '表权限' },
       },
+      {
+        path: 'permission/project-group',
+        name: 'ProjectGroupManage',
+        component: () => import('@/views/permission/project-group/ProjectGroupManage.vue'),
+        meta: { title: '项目组管理' },
+      },
       // 审批中心
       {
         path: 'approval/apply',
@@ -173,6 +179,13 @@ const routes: RouteRecordRaw[] = [
         name: 'QueryWorkbench',
         component: () => import('@/views/query/query/QueryWorkbench.vue'),
         meta: { title: '查询工作台' },
+      },
+      // OneSQL 增强编辑器
+      {
+        path: 'query/onesql',
+        name: 'OnesqlWorkbench',
+        component: () => import('@/views/query/onesql/OnesqlWorkbench.vue'),
+        meta: { title: 'OneSQL 工作台' },
       },
       // 可视化 - 数据集
       {

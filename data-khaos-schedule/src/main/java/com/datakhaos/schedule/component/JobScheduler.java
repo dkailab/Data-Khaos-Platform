@@ -42,6 +42,11 @@ public class JobScheduler {
             if (jobExecutor.isRunning(job.getId()) || StrUtil.isBlank(job.getCronExpression())) {
                 continue;
             }
+            // 校验依赖是否全部成功
+            if (!scheduleService.allUpstreamSuccess(job.getId())) {
+                log.debug("任务 {} 上游依赖未全部成功，跳过本轮", job.getJobName());
+                continue;
+            }
             try {
                 CronExpression expression = CronExpression.parse(job.getCronExpression());
                 LocalDateTime base = lastRun.computeIfAbsent(job.getId(), this::lastStartTime);
