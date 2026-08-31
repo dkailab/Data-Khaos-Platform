@@ -9,7 +9,10 @@
           <el-button type="primary" :icon="Search" :loading="searching" @click="searchTables">搜索表</el-button>
         </el-form-item>
         <el-form-item>
-          <el-button type="success" :icon="Plus" @click="lineageVisible = true">记录血缘</el-button>
+          <el-button type="success" :icon="MagicStick" @click="sqlVisible = true">SQL 自动分析</el-button>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :icon="Plus" @click="lineageVisible = true">手工录入</el-button>
         </el-form-item>
       </el-form>
     </div>
@@ -70,6 +73,31 @@
         <el-button type="primary" :loading="submitting" @click="submitLineage">保存</el-button>
       </template>
     </el-dialog>
+    <!-- SQL 血缘自动分析对话框 -->
+    <el-dialog v-model="sqlVisible" title="SQL 血缘自动分析" width="620px" destroy-on-close>
+      <el-form ref="sqlFormRef" :model="sqlForm" label-width="100px">
+        <el-form-item label="数据源" prop="datasourceId">
+          <el-select v-model="sqlForm.datasourceId" placeholder="请选择数据源" filterable style="width: 100%" @change="onDsChange">
+            <el-option v-for="ds in datasources" :key="ds.id" :label="ds.dsName" :value="ds.id!" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="数据库" prop="database">
+          <el-select v-model="sqlForm.database" placeholder="请选择数据库" clearable filterable style="width: 100%">
+            <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="SQL 语句" prop="sql">
+          <el-input v-model="sqlForm.sql" type="textarea" :rows="6"
+                    placeholder="请输入 INSERT INTO ... SELECT ... JOIN ...（点击分析解析出目标表与源表并自动写入血缘）" />
+        </el-form-item>
+      </el-form>
+      <el-alert v-if="analyzeResult" :type="analyzeCount > 0 ? 'success' : 'warning'" :closable="false"
+                :title="`解析完成：发现 ${analyzeCount} 条血缘关系（目标表 → 源表）`" />
+      <template #footer>
+        <el-button @click="sqlVisible = false">取消</el-button>
+        <el-button type="primary" :loading="analyzing" :disabled="!sqlForm.datasourceId || !sqlForm.sql" @click="doAnalyzeSql">分析并写入</el-button>
+      </template>
+    </el-dialog>
   </el-card>
 </template>
 
@@ -77,8 +105,9 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import { Plus, Search } from '@element-plus/icons-vue'
-import { getLineage, pageMetaTables, saveLineage } from '@/api/metadata'
+import { MagicStick, Plus, Search } from '@element-plus/icons-vue'
+import { analyzeSqlLineage, getLineage, listMetaDatabases, pageMetaTables, saveLineage } from '@/api/metadata'
+import { pageDatasources } from '@/api/datasource'
 import type { MetaTable, MetaTableLineage } from '@/types'
 
 const keyword = ref('')
@@ -95,6 +124,59 @@ const lineageForm = reactive<MetaTableLineage>({ relationType: 'ETL' })
 const lineageRules: FormRules = {
   sourceTableId: [{ required: true, message: '请输入源表ID', trigger: 'blur' }],
   targetTableId: [{ required: true, message: '请输入目标表ID', trigger: 'blur' }],
+}
+
+// SQL 自动分析
+const sqlVisible = ref(false)
+const analyzing = ref(false)
+const datasources = ref<any[]>([])
+const databases = ref<string[]>([])
+const analyzeCount = ref(0)
+const analyzeResult = ref(false)
+const sqlFormRef = ref<FormInstance>()
+const sqlForm = reactive({
+  datasourceId: '',
+  database: '',
+  sql: '',
+})
+
+async function loadDatasources() {
+  const data = await pageDatasources({ current: 1, size: 100 })
+  datasources.value = data.records || []
+}
+
+async function onDsChange(dsId: string) {
+  sqlForm.database = ''
+  databases.value = []
+  if (!dsId) return
+  try {
+    const dbs = (await listMetaDatabases(dsId)) || []
+    databases.value = dbs.map((d: any) => d.databaseName ?? d.id).filter(Boolean)
+  } catch {
+    databases.value = []
+  }
+}
+
+async function doAnalyzeSql() {
+  if (!sqlForm.datasourceId || !sqlForm.database || !sqlForm.sql.trim()) {
+    ElMessage.warning('请完整填写数据源、数据库与 SQL')
+    return
+  }
+  analyzing.value = true
+  analyzeResult.value = false
+  try {
+    const created = (await analyzeSqlLineage(sqlForm.datasourceId, sqlForm.database, sqlForm.sql.trim())) || []
+    analyzeCount.value = created.length
+    analyzeResult.value = true
+    ElMessage.success(`SQL 解析完成，写入 ${created.length} 条血缘`)
+    if (currentTable.value) {
+      selectTable(currentTable.value)
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '分析失败')
+  } finally {
+    analyzing.value = false
+  }
 }
 
 async function searchTables() {
@@ -134,7 +216,10 @@ async function submitLineage() {
   }
 }
 
-onMounted(searchTables)
+onMounted(async () => {
+  await loadDatasources()
+  searchTables()
+})
 </script>
 
 <style scoped>

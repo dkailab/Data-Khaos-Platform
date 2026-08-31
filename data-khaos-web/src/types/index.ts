@@ -356,6 +356,14 @@ export interface MetaColumn {
   sortOrder?: number
   /** 敏感级别 0:普通 1:敏感 2:高度敏感 */
   sensitiveLevel?: number
+  /** 业务名称（字段治理） */
+  bizName?: string
+  /** 业务说明（字段治理） */
+  bizComment?: string
+  /** 关联字典类型编码（数据治理） */
+  dictTypeCode?: string
+  /** 关联字典类型名称（冗余展示） */
+  dictTypeName?: string
 }
 
 export interface MetaTableLineage {

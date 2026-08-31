@@ -78,6 +78,20 @@ public class MetadataController {
         return R.ok(metadataService.columnPage(current, size, tableId));
     }
 
+    @Operation(summary = "更新字段业务元数据（业务名/说明/字典关联）")
+    @PutMapping("/column/{id}")
+    public R<Void> updateColumn(@PathVariable String id, @RequestBody MetaColumn patch) {
+        metadataService.updateColumn(id, patch);
+        return R.ok();
+    }
+
+    @Operation(summary = "数据标准落标校验")
+    @GetMapping("/column/{columnId}/standard-check")
+    public R<Map<String, Object>> checkColumnStandard(@PathVariable String columnId,
+                                                      @RequestParam String stdCode) {
+        return R.ok(metadataService.checkColumnStandard(columnId, stdCode));
+    }
+
     @Operation(summary = "检索（表/字段）")
     @GetMapping("/search")
     public R<List<Map<String, Object>>> search(@RequestParam String keyword) {
@@ -95,5 +109,13 @@ public class MetadataController {
     public R<Void> saveLineage(@RequestBody MetaTableLineage lineage) {
         metadataService.saveLineage(lineage);
         return R.ok();
+    }
+
+    @Operation(summary = "SQL 血缘自动分析（解析 INSERT/CREATE TABLE AS ... SELECT 写入血缘）")
+    @PostMapping("/lineage/analyze")
+    public R<List<MetaTableLineage>> analyzeLineage(@RequestParam String datasourceId,
+                                                    @RequestParam String database,
+                                                    @RequestParam String sql) {
+        return R.ok(metadataService.analyzeSqlLineage(datasourceId, database, sql));
     }
 }

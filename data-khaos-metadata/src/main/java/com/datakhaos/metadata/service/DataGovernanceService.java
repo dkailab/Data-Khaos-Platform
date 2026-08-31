@@ -191,6 +191,13 @@ public class DataGovernanceService {
         return PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), page.getRecords());
     }
 
+    /** 全部启用标准（下拉） */
+    public List<MetaStandard> standardList() {
+        return standardMapper.selectList(new LambdaQueryWrapper<MetaStandard>()
+                .eq(MetaStandard::getStatus, 1)
+                .orderByAsc(MetaStandard::getSortOrder));
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void createStandard(MetaStandard standard) {
         if (StrUtil.isBlank(standard.getStdCode())) {

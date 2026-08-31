@@ -45,4 +45,16 @@ public class MetaColumn extends BaseEntity {
 
     /** 敏感级别 0:普通 1:敏感 2:高度敏感 */
     private Integer sensitiveLevel;
+
+    /** 业务名称（字段治理） */
+    private String bizName;
+
+    /** 业务说明（字段治理） */
+    private String bizComment;
+
+    /** 关联字典类型编码（数据治理） */
+    private String dictTypeCode;
+
+    /** 关联字典类型名称（冗余展示） */
+    private String dictTypeName;
 }

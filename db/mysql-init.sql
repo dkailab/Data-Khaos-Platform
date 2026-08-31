@@ -277,6 +277,10 @@ CREATE TABLE IF NOT EXISTS meta_column (
     description     VARCHAR(500) COMMENT '描述',
     sort_order      INT DEFAULT 0 COMMENT '排序',
     sensitive_level TINYINT DEFAULT 0 COMMENT '敏感级别 0:普通 1:敏感 2:高度敏感',
+    biz_name        VARCHAR(200) COMMENT '业务名称',
+    biz_comment     VARCHAR(500) COMMENT '业务说明',
+    dict_type_code  VARCHAR(100) COMMENT '关联字典类型编码（数据治理）',
+    dict_type_name  VARCHAR(200) COMMENT '关联字典类型名称',
     create_time     DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     UNIQUE KEY uk_table_col (table_id, column_name)
 ) ENGINE=InnoDB COMMENT='字段信息表';

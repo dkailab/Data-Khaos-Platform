@@ -100,6 +100,12 @@ const routes: RouteRecordRaw[] = [
       },
       // 元数据中心
       {
+        path: 'metadata/list',
+        name: 'MetadataList',
+        component: () => import('@/views/metadata/list/MetadataList.vue'),
+        meta: { title: '元数据管理' },
+      },
+      {
         path: 'metadata/structure',
         name: 'MetadataStructure',
         component: () => import('@/views/metadata/structure/Structure.vue'),

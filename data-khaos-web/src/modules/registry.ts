@@ -68,7 +68,7 @@ export const CATEGORIES: CategoryDef[] = [
     icon: 'Odometer',
     features: [
       { key: 'gov_quality', title: '数据质量校验', path: '/dquality/rule', icon: 'Odometer' },
-      { key: 'gov_meta', title: '元数据管理', path: '/metadata/structure' },
+      { key: 'gov_meta', title: '元数据管理', path: '/metadata/list' },
       { key: 'gov_lineage', title: '数据血缘分析', path: '/metadata/lineage' },
       { key: 'gov_dict', title: '数据字典管理', path: '/govern/dict', icon: 'Collection' },
       { key: 'gov_std', title: '数据标准配置', path: '/govern/standard', icon: 'DataLine' },

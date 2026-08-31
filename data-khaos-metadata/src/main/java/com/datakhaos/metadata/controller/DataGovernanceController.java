@@ -113,6 +113,12 @@ public class DataGovernanceController {
         return R.ok(governanceService.standardPage(current, size, keyword, category, status));
     }
 
+    @Operation(summary = "全部启用标准（下拉）")
+    @GetMapping("/standard/list")
+    public R<List<MetaStandard>> standardList() {
+        return R.ok(governanceService.standardList());
+    }
+
     @Operation(summary = "新增数据标准")
     @PostMapping("/standard")
     public R<Void> createStandard(@RequestBody MetaStandard standard) {

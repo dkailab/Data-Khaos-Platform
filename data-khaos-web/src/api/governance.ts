@@ -56,6 +56,11 @@ export function pageStandards(params: Record<string, any>) {
   return get<PageResult<MetaStandard>>('/meta/standard/page', params)
 }
 
+/** 全部启用标准（下拉） */
+export function listStandards() {
+  return get<MetaStandard[]>('/meta/standard/list')
+}
+
 export function createStandard(data: MetaStandard) {
   return post<void>('/meta/standard', data)
 }
