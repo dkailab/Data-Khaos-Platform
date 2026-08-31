@@ -300,6 +300,55 @@ CREATE TABLE meta_table_lineage (
     create_time     DATETIME DEFAULT CURRENT_TIMESTAMP()
 );
 
+-- 3.x 数据治理：数据字典 + 数据标准
+CREATE TABLE meta_dict_type (
+    id          VARCHAR(32) PRIMARY KEY,
+    type_code   VARCHAR(100) NOT NULL,
+    type_name   VARCHAR(200) NOT NULL,
+    description VARCHAR(500),
+    status      TINYINT DEFAULT 1,
+    sort_order  INT DEFAULT 0,
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP(),
+    UNIQUE KEY uk_dict_type_code (type_code)
+);
+COMMENT ON TABLE meta_dict_type IS '数据治理-数据字典类型表';
+COMMENT ON COLUMN meta_dict_type.type_code IS '字典类型编码';
+
+CREATE TABLE meta_dict_item (
+    id          VARCHAR(32) PRIMARY KEY,
+    type_id     VARCHAR(32) NOT NULL,
+    item_code   VARCHAR(100) NOT NULL,
+    item_name   VARCHAR(200) NOT NULL,
+    item_value  VARCHAR(500),
+    status      TINYINT DEFAULT 1,
+    sort_order  INT DEFAULT 0,
+    description VARCHAR(500),
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP(),
+    KEY idx_dict_item_type (type_id)
+);
+COMMENT ON TABLE meta_dict_item IS '数据治理-数据字典项表';
+COMMENT ON COLUMN meta_dict_item.type_id IS '所属字典类型ID';
+
+CREATE TABLE meta_standard (
+    id            VARCHAR(32) PRIMARY KEY,
+    std_code       VARCHAR(100) NOT NULL,
+    std_name       VARCHAR(200) NOT NULL,
+    category       VARCHAR(50),
+    data_type      VARCHAR(50),
+    data_length    INT,
+    data_precision INT,
+    data_scale     INT,
+    unit           VARCHAR(50),
+    enum_range     VARCHAR(2000),
+    format_rule    VARCHAR(1000),
+    description    VARCHAR(500),
+    status         TINYINT DEFAULT 1,
+    sort_order     INT DEFAULT 0,
+    create_time    DATETIME DEFAULT CURRENT_TIMESTAMP(),
+    UNIQUE KEY uk_std_code (std_code)
+);
+COMMENT ON TABLE meta_standard IS '数据治理-数据标准配置表';
+
 COMMENT ON TABLE meta_table_lineage IS '表血缘关系表';
 
 -- ============================================================

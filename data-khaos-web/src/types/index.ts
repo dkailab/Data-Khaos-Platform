@@ -368,6 +368,62 @@ export interface MetaTableLineage {
   relationType?: string
 }
 
+/* ==================== 数据治理 ==================== */
+
+export interface MetaDictType {
+  id?: string
+  /** 字典类型编码 */
+  typeCode?: string
+  /** 字典类型名称 */
+  typeName?: string
+  description?: string
+  /** 1:启用 0:停用 */
+  status?: number
+  sortOrder?: number
+  createTime?: string
+}
+
+export interface MetaDictItem {
+  id?: string
+  /** 所属字典类型ID */
+  typeId?: string
+  /** 字典项编码 */
+  itemCode?: string
+  /** 字典项名称 */
+  itemName?: string
+  /** 字典项值 */
+  itemValue?: string
+  /** 1:启用 0:停用 */
+  status?: number
+  sortOrder?: number
+  description?: string
+  createTime?: string
+}
+
+export interface MetaStandard {
+  id?: string
+  /** 标准编码 */
+  stdCode?: string
+  /** 标准名称 */
+  stdName?: string
+  /** 标准分类 */
+  category?: string
+  dataType?: string
+  dataLength?: number
+  dataPrecision?: number
+  dataScale?: number
+  unit?: string
+  /** 取值范围/枚举 */
+  enumRange?: string
+  /** 格式/编码规则 */
+  formatRule?: string
+  description?: string
+  /** 1:启用 0:停用 */
+  status?: number
+  sortOrder?: number
+  createTime?: string
+}
+
 /* ==================== 数据集市 ==================== */
 
 /** 模型市场卡片 DTO（仅已发布，含统计） */

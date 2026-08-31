@@ -94,6 +94,15 @@
               <el-option label="月" value="M" />
               <el-option label="年" value="Y" />
             </el-select>
+            <el-select v-if="d.levels.length" v-model="d.levelColumn" size="small" class="cb-dim-level" placeholder="默认层级">
+              <el-option label="默认（源列）" value="" />
+              <el-option
+                v-for="lv in d.levels"
+                :key="lv.levelColumn"
+                :label="`${lv.levelName} · ${lv.levelColumn}`"
+                :value="lv.levelColumn"
+              />
+            </el-select>
             <el-select v-model="d.sort" size="small" class="cb-dim-sort">
               <el-option label="默认" value="" />
               <el-option label="升序" value="ASC" />
@@ -225,6 +234,9 @@
                   <span class="cb-field-name" :title="dim.dimName" v-html="highlight(dim.dimName || '')"></span>
                   <span class="cb-field-code">{{ dim.dimCode }}</span>
                   <span class="cb-dim-type" :class="dimTypeClass(dim.dimType)">{{ dimTypeLabel(dim.dimType) }}</span>
+                  <el-tooltip v-if="dim.id && m.dimLevels[dim.id]?.length" content="支持层级下钻" placement="top">
+                    <el-icon class="cb-field-drill"><DataAnalysis /></el-icon>
+                  </el-tooltip>
                   <el-tooltip content="设为筛选器" placement="top">
                     <el-icon class="cb-field-op" @click.stop="addFilter(m, dim)"><Filter /></el-icon>
                   </el-tooltip>
@@ -406,10 +418,10 @@ import {
   TrendCharts, View, WarningFilled,
 } from '@element-plus/icons-vue'
 import ChartRenderer from '@/components/chart/ChartRenderer.vue'
-import { martModelDetail, pageMartMarket, queryMart, dimensionValues } from '@/api/mart'
+import { martModelDetail, pageMartMarket, queryMart, dimensionValues, listDimLevels } from '@/api/mart'
 import { listDashboardItems, saveItem } from '@/api/visual'
 import type {
-  ChartType, MarketModelDto, MartDimension, MartMetric, QueryResult, VisualDashboardItem,
+  ChartType, MarketModelDto, MartDimension, MartDimLevel, MartMetric, QueryResult, VisualDashboardItem,
 } from '@/types'
 
 /* ============ 路由 ============ */
@@ -468,6 +480,8 @@ interface PoolModel {
   datasourceId?: string
   metrics: MartMetric[]
   dimensions: MartDimension[]
+  /** 维度层级缓存（dimId -> MartDimLevel[]，用于下钻） */
+  dimLevels: Record<string, MartDimLevel[]>
   loaded: boolean
 }
 
@@ -511,11 +525,22 @@ async function toggleModel(m: PoolModel) {
 async function ensureModelLoaded(m: PoolModel) {
   if (m.loaded) return
   m.loaded = true
+  m.dimLevels = {}
   try {
     const detail = await martModelDetail(m.id)
     m.metrics = detail.metrics || []
     m.dimensions = detail.dimensions || []
     m.datasourceId = detail.model?.datasourceId
+    // 加载各维度层级（供层级下钻切换）
+    await Promise.all(
+      (m.dimensions || []).map(async (dim) => {
+        if (!dim.id) return
+        try {
+          const levels = await listDimLevels(dim.id)
+          if (levels && levels.length) m.dimLevels[dim.id as string] = levels
+        } catch { /* 无层级/仅一层的维度忽略 */ }
+      }),
+    )
   } catch (e: any) {
     ElMessage.error(e?.message || '加载模型资产失败')
   }
@@ -563,7 +588,15 @@ interface SelField {
   modelName: string
 }
 
-interface SelDim extends SelField { dimType: string; grain: string; sort: string }
+interface SelDim extends SelField {
+  dimType: string
+  grain: string
+  sort: string
+  /** 下钻层级列（空=使用维度源列） */
+  levelColumn: string
+  /** 该维度可选层级（来自 MartDimLevel） */
+  levels: MartDimLevel[]
+}
 interface SelMetric extends SelField { metricType: string; unit: string }
 interface SelFilter extends SelField {
   dimId: string
@@ -644,6 +677,8 @@ function addDimension(m: PoolModel, dim: MartDimension) {
     dimType: dim.dimType || 'COMMON',
     grain: '',
     sort: '',
+    levelColumn: '',
+    levels: (dim.id && m.dimLevels[dim.id]) || [],
   })
   checkConflict(m.id, dim.dimName)
 }
@@ -749,7 +784,7 @@ function buildDataConfig() {
     modelName: primaryModel.value?.name || '',
     dimensions: selectedDims.value
       .filter((d) => d.modelId === pid)
-      .map((d) => ({ fieldCode: d.code, fieldName: d.name, dimType: d.dimType, grain: d.grain, sort: d.sort })),
+      .map((d) => ({ fieldCode: d.code, fieldName: d.name, dimType: d.dimType, grain: d.grain, sort: d.sort, levelColumn: d.levelColumn || undefined })),
     metrics: selectedMetrics.value
       .filter((m) => m.modelId === pid)
       .map((m) => ({ fieldCode: m.code, fieldName: m.name, metricType: m.metricType, unit: m.unit })),
@@ -779,7 +814,7 @@ async function runQuery(manual = false) {
     const r = await queryMart({
       modelId: pid,
       metrics: mets.map((m) => ({ metricCode: m.code })),
-      dimensions: dims.map((d) => ({ dimCode: d.code, grain: d.grain || undefined })),
+      dimensions: dims.map((d) => ({ dimCode: d.code, grain: d.grain || undefined, levelColumn: d.levelColumn || undefined })),
       filters: fts.map((f) => ({ dimCode: f.code, operator: f.operator, values: f.values })),
       sorts: dims.filter((d) => d.sort).map((d) => ({ code: d.code, direction: d.sort })),
       limit: limit.value,
@@ -897,6 +932,7 @@ async function init() {
       dimensionCount: m.dimensionCount,
       metrics: [],
       dimensions: [],
+      dimLevels: {},
       loaded: false,
     }))
   } catch (e: any) {
@@ -982,7 +1018,19 @@ async function restoreModelConfig(dc: any) {
   const dimTypeOf = (code: string) => m.dimensions.find((x) => x.dimCode === code)?.dimType || 'COMMON'
   const metricTypeOf = (code: string) => m.metrics.find((x) => x.metricCode === code)?.metricType || 'ATOMIC'
   selectedDims.value = (dc.dimensions || [])
-    .map((d: any) => ({ ...base, code: d.fieldCode, name: d.fieldName || d.fieldCode, dimType: dimTypeOf(d.fieldCode), grain: d.grain || '', sort: d.sort || '' }))
+    .map((d: any) => {
+      const dimObj = m.dimensions.find((x) => x.dimCode === d.fieldCode)
+      return {
+        ...base,
+        code: d.fieldCode,
+        name: d.fieldName || d.fieldCode,
+        dimType: d.dimType || dimTypeOf(d.fieldCode),
+        grain: d.grain || '',
+        sort: d.sort || '',
+        levelColumn: d.levelColumn || '',
+        levels: (dimObj?.id && m.dimLevels[dimObj.id]) || [],
+      }
+    })
     .filter((d: SelDim) => !!d.code)
   selectedMetrics.value = (dc.metrics || [])
     .map((x: any) => ({ ...base, code: x.fieldCode, name: x.fieldName || x.fieldCode, metricType: metricTypeOf(x.fieldCode), unit: x.unit || '' }))
@@ -1181,6 +1229,7 @@ onBeforeUnmount(() => {
 
 .cb-dim-sort { width: 68px; }
 .cb-dim-grain { width: 60px; }
+.cb-dim-level { width: 112px; margin-left: 4px; }
 .cb-metric-agg { width: 92px; }
 .cb-filter-op { width: 78px; }
 .cb-filter-value { width: 170px; }
@@ -1335,6 +1384,8 @@ onBeforeUnmount(() => {
 .cb-field-code { font-size: 10.5px; color: var(--text-3); font-family: 'SF Mono', Menlo, monospace; }
 .cb-field-op { font-size: 12px; color: var(--filter-color); opacity: 0; flex-shrink: 0; }
 .cb-field-item:hover .cb-field-op { opacity: 1; }
+.cb-field-drill { font-size: 12px; color: var(--dim-color); opacity: 0; flex-shrink: 0; }
+.cb-field-item:hover .cb-field-drill { opacity: 1; }
 .cb-field-expr { font-size: 12px; color: var(--text-3); opacity: 0; flex-shrink: 0; }
 .cb-field-item:hover .cb-field-expr { opacity: 1; }
 

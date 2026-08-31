@@ -291,6 +291,49 @@ CREATE TABLE IF NOT EXISTS meta_table_lineage (
     create_time     DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
 ) ENGINE=InnoDB COMMENT='表血缘关系表';
 
+CREATE TABLE IF NOT EXISTS meta_dict_type (
+    id          VARCHAR(32) NOT NULL PRIMARY KEY COMMENT '主键ID',
+    type_code   VARCHAR(100) NOT NULL COMMENT '字典类型编码',
+    type_name   VARCHAR(200) NOT NULL COMMENT '字典类型名称',
+    description VARCHAR(500) COMMENT '描述',
+    status      TINYINT DEFAULT 1 COMMENT '状态 0:停用 1:启用',
+    sort_order  INT DEFAULT 0 COMMENT '排序',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    UNIQUE KEY uk_dict_type_code (type_code)
+) ENGINE=InnoDB COMMENT='数据治理-数据字典类型表';
+
+CREATE TABLE IF NOT EXISTS meta_dict_item (
+    id          VARCHAR(32) NOT NULL PRIMARY KEY COMMENT '主键ID',
+    type_id     VARCHAR(32) NOT NULL COMMENT '所属字典类型ID',
+    item_code   VARCHAR(100) NOT NULL COMMENT '字典项编码',
+    item_name   VARCHAR(200) NOT NULL COMMENT '字典项名称',
+    item_value  VARCHAR(500) COMMENT '字典项值',
+    status      TINYINT DEFAULT 1 COMMENT '状态 0:停用 1:启用',
+    sort_order  INT DEFAULT 0 COMMENT '排序',
+    description VARCHAR(500) COMMENT '描述',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    KEY idx_dict_item_type (type_id)
+) ENGINE=InnoDB COMMENT='数据治理-数据字典项表';
+
+CREATE TABLE IF NOT EXISTS meta_standard (
+    id            VARCHAR(32) NOT NULL PRIMARY KEY COMMENT '主键ID',
+    std_code       VARCHAR(100) NOT NULL COMMENT '标准编码',
+    std_name       VARCHAR(200) NOT NULL COMMENT '标准名称',
+    category       VARCHAR(50) COMMENT '标准分类（元数据类/编码类/格式类等）',
+    data_type      VARCHAR(50) COMMENT '数据类型',
+    data_length    INT COMMENT '长度',
+    data_precision INT COMMENT '精度',
+    data_scale     INT COMMENT '小数位',
+    unit           VARCHAR(50) COMMENT '单位',
+    enum_range     VARCHAR(2000) COMMENT '取值范围/枚举（JSON或逗号分隔）',
+    format_rule    VARCHAR(1000) COMMENT '格式/编码规则',
+    description    VARCHAR(500) COMMENT '描述',
+    status         TINYINT DEFAULT 1 COMMENT '状态 0:停用 1:启用',
+    sort_order     INT DEFAULT 0 COMMENT '排序',
+    create_time    DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    UNIQUE KEY uk_std_code (std_code)
+) ENGINE=InnoDB COMMENT='数据治理-数据标准配置表';
+
 -- ============================================================
 -- 4. 集市表
 -- ============================================================

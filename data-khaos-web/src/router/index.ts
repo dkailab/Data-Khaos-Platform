@@ -117,6 +117,19 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/metadata/search/Search.vue'),
         meta: { title: '元数据搜索' },
       },
+      // 数据治理
+      {
+        path: 'govern/dict',
+        name: 'GovernDict',
+        component: () => import('@/views/govern/dict/DictList.vue'),
+        meta: { title: '数据字典管理' },
+      },
+      {
+        path: 'govern/standard',
+        name: 'GovernStandard',
+        component: () => import('@/views/govern/standard/StandardList.vue'),
+        meta: { title: '数据标准配置' },
+      },
       // 数据集市
       {
         path: 'mart/market',
