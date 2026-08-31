@@ -26,7 +26,6 @@
           </div>
           <div class="tpl-info">
             <span class="tpl-name">{{ tpl.name }}</span>
-            <span class="tpl-size">{{ tpl.size }}</span>
           </div>
         </div>
         <div class="template-card blank-card" @click="openCreate">
@@ -35,7 +34,6 @@
           </div>
           <div class="tpl-info">
             <span class="tpl-name">空白画布</span>
-            <span class="tpl-size">自定义尺寸</span>
           </div>
         </div>
       </div>
@@ -202,9 +200,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import {
   CopyDocument, Delete, Edit, Grid, List, More, Plus, Search, Top, Bottom, View,
-  DataAnalysis, Monitor, DataLine, PieChart,
+  DataAnalysis, Monitor, PieChart,
 } from '@element-plus/icons-vue'
-import { createDashboard, dashboardVersions, deleteDashboard, pageDashboards, publishDashboard, unpublishDashboard, updateDashboard } from '@/api/visual'
+import { createDashboard, dashboardVersions, deleteDashboard, pageDashboards, publishDashboard, saveItem, unpublishDashboard, updateDashboard } from '@/api/visual'
+import { martModelDetail, pageMartMarket, queryMart } from '@/api/mart'
 import type { VisualDashboard, VisualDashboardVersion } from '@/types'
 
 const router = useRouter()
@@ -240,10 +239,12 @@ const canvasPresets = [
 ]
 
 const templates = [
-  { code: 'bigscreen', name: '数据大屏', size: '1920×1080', icon: 'Monitor', gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
-  { code: 'report', name: '数据报表', size: '1440×900', icon: 'DataAnalysis', gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
-  { code: 'dashboard', name: '监控看板', size: '1920×1080', icon: 'DataLine', gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
-  { code: 'mobile', name: '移动看板', size: '375×667', icon: 'PieChart', gradient: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)' },
+  { code: 'bigscreen', name: '数据大屏', icon: 'Monitor', gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+  { code: 'report', name: '数据报表', icon: 'DataAnalysis', gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
+  { code: 'mobile', name: '移动看板', icon: 'PieChart', gradient: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)' },
+  // —— demo 样例：基于指标/维度语义模型，一键生成可下钻图表 ——
+  { code: 'demo_trend', name: '指标趋势样例', icon: 'TrendCharts', gradient: 'linear-gradient(135deg, #f6d365 0%, #fda085 100%)', demo: true, chartType: 'LINE', dimTypePref: 'TIME', canvas: { width: 1440, height: 900 } },
+  { code: 'demo_compare', name: '维度分布样例', icon: 'Histogram', gradient: 'linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%)', demo: true, chartType: 'BAR', dimTypePref: 'COMMON', canvas: { width: 1440, height: 900 } },
 ]
 
 const versionDialog = ref(false)
@@ -283,6 +284,10 @@ function openCreate() {
 }
 
 function createFromTemplate(tpl: any) {
+  if (tpl.demo) {
+    createDemoDashboard(tpl)
+    return
+  }
   const preset = canvasPresets.find((p) => {
     if (tpl.code === 'bigscreen') return p.value === '1920x1080'
     if (tpl.code === 'report') return p.value === '1440x900'
@@ -299,6 +304,99 @@ function createFromTemplate(tpl: any) {
   })
   dialogVisible.value = true
   isEdit.value = false
+}
+
+const demoCreating = ref(false)
+
+/** 一键生成基于指标/维度语义模型的 demo 看板 */
+async function createDemoDashboard(tpl: any) {
+  if (demoCreating.value) return
+  demoCreating.value = true
+  try {
+    // 1. 取第一个已发布且含指标的模型
+    const page = await pageMartMarket({ current: 1, size: 20 })
+    const model = (page.records || []).find((m) => (m.metricCount || 0) > 0)
+    if (!model || !model.id) {
+      ElMessage.warning('暂无已发布模型，请先在「数据集市」发布并关联指标')
+      return
+    }
+    if (!model.datasourceId) {
+      ElMessage.warning(`模型「${model.modelName}」未关联数据源，无法生成 demo`)
+      return
+    }
+
+    // 2. 解析指标与维度
+    const detail = await martModelDetail(model.id)
+    const metrics = (detail.metrics || []).filter((x) => x.metricCode)
+    const dimensions = (detail.dimensions || []).filter((x) => x.dimCode)
+    if (!metrics.length) {
+      ElMessage.warning(`模型「${model.modelName}」暂无指标`)
+      return
+    }
+    const metric = metrics[0]
+    const dim = dimensions.find((d) => d.dimType === tpl.dimTypePref) || dimensions[0]
+    const grain = dim && dim.dimType === 'TIME' ? 'M' : undefined
+
+    // 3. 生成语义 SQL
+    const q = await queryMart({
+      modelId: model.id,
+      metrics: [{ metricCode: metric.metricCode }],
+      dimensions: dim ? [{ dimCode: dim.dimCode, grain }] : [],
+      limit: 1000,
+    })
+
+    // 4. 创建仪表板并保存组件
+    const canvas = tpl.canvas || { width: 1440, height: 900 }
+    const dashboardId = await createDashboard({
+      name: tpl.name + ' - ' + new Date().toLocaleDateString(),
+      layout: JSON.stringify({ canvasWidth: canvas.width, canvasHeight: canvas.height }),
+      refreshInterval: 60,
+      status: 1,
+    })
+
+    const dataConfig = {
+      mode: 'MODEL',
+      modelId: model.id,
+      modelName: model.modelName || '',
+      dimensions: dim
+        ? [{ fieldCode: dim.dimCode, fieldName: dim.dimName || dim.dimCode, dimType: dim.dimType, grain: grain || '', sort: '' }]
+        : [],
+      metrics: [{ fieldCode: metric.metricCode, fieldName: metric.metricName || metric.metricCode, metricType: metric.metricType, unit: metric.unit }],
+      filters: [],
+      limit: 1000,
+    }
+    const styleConfig = JSON.stringify({
+      title: { show: true, text: '', fontSize: 15, align: 'left' },
+      legend: { show: true, position: 'top' },
+      colorTheme: 'default',
+      labelShow: false,
+      decimalDigits: 2,
+    })
+
+    await saveItem({
+      dashboardId,
+      title: dim
+        ? `${metric.metricName || metric.metricCode} × ${dim.dimName || dim.dimCode}`
+        : metric.metricName || metric.metricCode,
+      chartType: tpl.chartType,
+      datasourceId: model.datasourceId,
+      querySql: q.sql,
+      dataConfig: JSON.stringify(dataConfig),
+      styleConfig,
+      posX: 60,
+      posY: 60,
+      width: canvas.width - 120,
+      height: canvas.height - 120,
+      zIndex: 1,
+    })
+
+    ElMessage.success('demo 看板已生成，可继续拖拽指标/维度搭建')
+    router.push({ name: 'VisualDashboardEdit', params: { id: dashboardId } })
+  } catch (e: any) {
+    ElMessage.error(e?.message || '生成 demo 失败')
+  } finally {
+    demoCreating.value = false
+  }
 }
 
 async function submit() {
@@ -488,8 +586,7 @@ onMounted(load)
   color: #909399;
 }
 
-.tpl-name { display: block; font-size: 15px; font-weight: 600; color: #1a1d27; margin-bottom: 4px; }
-.tpl-size { font-size: 12px; color: #909399; }
+.tpl-name { display: block; font-size: 15px; font-weight: 600; color: #1a1d27; }
 
 /* ============ 仪表板列表 ============ */
 .dashboard-section {

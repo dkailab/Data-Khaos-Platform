@@ -303,6 +303,7 @@ CREATE TABLE IF NOT EXISTS mart_model (
     model_code         VARCHAR(100) NOT NULL COMMENT '模型编码',
     model_type         VARCHAR(50) DEFAULT 'STAR' COMMENT '类型 STAR/SNOWFLAKE',
     datasource_id      VARCHAR(32) COMMENT '数据源ID',
+    fact_table         VARCHAR(200) COMMENT '主事实表',
     description        VARCHAR(500) COMMENT '描述',
     status             TINYINT DEFAULT 0 COMMENT '状态 0:草稿 1:已发布 2:下线',
     version            INT DEFAULT 1 COMMENT '版本',

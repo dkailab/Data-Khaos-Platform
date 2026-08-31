@@ -4,12 +4,15 @@ import com.datakhaos.common.model.PageResult;
 import com.datakhaos.common.model.R;
 import com.datakhaos.datasource.api.model.QueryResult;
 import com.datakhaos.mart.api.model.MarketModelDto;
+import com.datakhaos.mart.dto.MartQueryRequest;
+import com.datakhaos.mart.dto.MartQueryResult;
 import com.datakhaos.mart.entity.MartDimLevel;
 import com.datakhaos.mart.entity.MartDimension;
 import com.datakhaos.mart.entity.MartMetric;
 import com.datakhaos.mart.entity.MartModel;
 import com.datakhaos.mart.entity.MartModelRel;
 import com.datakhaos.mart.entity.MartWarehouseLayer;
+import com.datakhaos.mart.service.MartQueryService;
 import com.datakhaos.mart.service.MartService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,6 +32,22 @@ import java.util.Map;
 public class MartController {
 
     private final MartService martService;
+    private final MartQueryService martQueryService;
+
+    // ==================== 语义查询（BI 画布） ====================
+
+    @Operation(summary = "语义查询：模型 + 指标 + 维度 + 筛选 + 排序 → 生成 SQL 并执行")
+    @PostMapping("/query")
+    public R<MartQueryResult> query(@RequestBody MartQueryRequest request) {
+        return R.ok(martQueryService.query(request));
+    }
+
+    @Operation(summary = "维度取值（枚举筛选器下拉用）")
+    @GetMapping("/dimension/{dimId}/values")
+    public R<List<String>> dimensionValues(@PathVariable String dimId,
+                                           @RequestParam(defaultValue = "100") int limit) {
+        return R.ok(martQueryService.dimensionValues(dimId, limit));
+    }
 
     // ==================== 数仓分层 ====================
 

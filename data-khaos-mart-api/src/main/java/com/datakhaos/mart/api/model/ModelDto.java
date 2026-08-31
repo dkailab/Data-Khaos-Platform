@@ -29,6 +29,9 @@ public class ModelDto implements Serializable {
 
     private String datasourceId;
 
+    /** 主事实表 */
+    private String factTable;
+
     private String description;
 
     /** 0:草稿 1:已发布 2:下线 */

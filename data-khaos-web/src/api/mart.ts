@@ -6,6 +6,8 @@ import type {
   MartMetric,
   MartModel,
   MartModelRel,
+  MartQueryRequest,
+  MartQueryResult,
   MartWarehouseLayer,
   PageResult,
   QueryResult,
@@ -105,6 +107,18 @@ export function listDimLevels(dimId: string) {
 /** 保存维度层级（全量替换） */
 export function saveDimLevels(dimId: string, levels: MartDimLevel[]) {
   return post<void>(`/mart/dimension/${dimId}/levels`, levels)
+}
+
+/* ==================== 语义查询（BI 画布） ==================== */
+
+/** 语义查询：模型 + 指标 + 维度 + 筛选 + 排序 → 服务端生成 SQL 并执行 */
+export function queryMart(data: MartQueryRequest) {
+  return post<MartQueryResult>('/mart/query', data)
+}
+
+/** 维度取值（枚举筛选器下拉用） */
+export function dimensionValues(dimId: string, limit = 100) {
+  return get<string[]>(`/mart/dimension/${dimId}/values`, { limit })
 }
 
 /* ==================== 模型关联 ==================== */

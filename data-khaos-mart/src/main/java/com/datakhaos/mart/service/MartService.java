@@ -476,6 +476,7 @@ public class MartService {
         dto.setModelCode(model.getModelCode());
         dto.setModelType(model.getModelType());
         dto.setDatasourceId(model.getDatasourceId());
+        dto.setFactTable(model.getFactTable());
         dto.setDescription(model.getDescription());
         dto.setStatus(model.getStatus());
         dto.setVersion(model.getVersion());

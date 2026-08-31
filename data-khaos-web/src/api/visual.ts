@@ -22,9 +22,9 @@ export function getDashboard(id: string) {
   return get<VisualDashboard>(`/visual/dashboard/${id}`)
 }
 
-/** 新增仪表板 */
+/** 新增仪表板（返回新仪表板ID） */
 export function createDashboard(data: VisualDashboard) {
-  return post<void>('/visual/dashboard', data)
+  return post<string>('/visual/dashboard', data)
 }
 
 /** 修改仪表板（注意后端为 PUT 无路径ID） */

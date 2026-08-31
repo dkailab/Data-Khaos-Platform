@@ -409,6 +409,8 @@ export interface MartModel {
   /** STAR / SNOWFLAKE */
   modelType?: string
   datasourceId?: string
+  /** 主事实表 */
+  factTable?: string
   description?: string
   /** 0:草稿 1:已发布 2:下线 */
   status?: number
@@ -474,6 +476,48 @@ export interface MartModelRel {
   joinKey?: string
   /** INNER / LEFT / RIGHT */
   joinType?: string
+}
+
+/* ==================== 语义查询（BI 画布） ==================== */
+
+export interface MartQueryMetricRef {
+  metricCode?: string
+}
+
+export interface MartQueryDimRef {
+  dimCode?: string
+  /** 时间维度粒度 Y / M / D */
+  grain?: string
+  /** 层级下钻列 */
+  levelColumn?: string
+}
+
+export interface MartQueryFilterRef {
+  dimCode?: string
+  /** EQ / NE / GT / GTE / LT / LTE / LIKE / IN / NOT_IN / BETWEEN */
+  operator?: string
+  values?: string[]
+}
+
+export interface MartQuerySortRef {
+  code?: string
+  direction?: string
+}
+
+export interface MartQueryRequest {
+  modelId: string
+  metrics?: MartQueryMetricRef[]
+  dimensions?: MartQueryDimRef[]
+  filters?: MartQueryFilterRef[]
+  sorts?: MartQuerySortRef[]
+  limit?: number
+}
+
+export interface MartQueryResult {
+  sql: string
+  result: QueryResult
+  truncated?: boolean
+  originalRowCount?: number
 }
 
 /* ==================== 数据质量 ==================== */

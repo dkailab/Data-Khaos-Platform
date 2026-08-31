@@ -35,6 +35,9 @@ public class MartModel extends BaseEntity {
     /** 数据源ID */
     private String datasourceId;
 
+    /** 主事实表（语义查询的 FROM 表） */
+    private String factTable;
+
     /** 描述 */
     private String description;
 

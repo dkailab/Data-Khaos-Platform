@@ -56,9 +56,8 @@ public class VisualController {
 
     @Operation(summary = "新增仪表板")
     @PostMapping("/dashboard")
-    public R<Void> createDashboard(@RequestBody VisualDashboard dashboard) {
-        visualService.createDashboard(dashboard);
-        return R.ok();
+    public R<String> createDashboard(@RequestBody VisualDashboard dashboard) {
+        return R.ok(visualService.createDashboard(dashboard));
     }
 
     @Operation(summary = "修改仪表板")

@@ -87,7 +87,7 @@ public class VisualService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void createDashboard(VisualDashboard dashboard) {
+    public String createDashboard(VisualDashboard dashboard) {
         if (StrUtil.isBlank(dashboard.getName())) {
             throw new BusinessException("仪表板名称不能为空");
         }
@@ -97,6 +97,7 @@ public class VisualService {
             dashboard.setCreateBy(MetadataHolder.getUserId());
         }
         dashboardMapper.insert(dashboard);
+        return dashboard.getId();
     }
 
     @Transactional(rollbackFor = Exception.class)

@@ -313,6 +313,7 @@ CREATE TABLE mart_model (
     model_code      VARCHAR(100) NOT NULL UNIQUE,
     model_type      VARCHAR(50) DEFAULT 'STAR', -- STAR / SNOWFLAKE
     datasource_id   VARCHAR(32),
+    fact_table      VARCHAR(200),
     description     VARCHAR(500),
     status          TINYINT DEFAULT 0,         -- 0:草稿 1:已发布 2:下线
     version         INT DEFAULT 1,
