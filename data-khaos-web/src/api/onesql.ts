@@ -1,5 +1,5 @@
 import request, { get, post } from './request'
-import type { PageResult } from '@/types'
+import type { PageResult, QueryResult } from '@/types'
 
 /** SQL 补全请求 */
 export interface SqlCompleteRequest {
@@ -29,15 +29,47 @@ export interface SqlParseResult {
   parseError?: string
 }
 
-/** 表结构信息 */
+/** SQL 诊断问题 */
+export interface DiagnosisIssue {
+  severity: 'info' | 'warning' | 'error'
+  rule: string
+  message: string
+  suggestion: string
+}
+
+/** SQL 诊断结果 */
+export interface SqlDiagnoseResult {
+  healthy: boolean
+  issues: DiagnosisIssue[]
+}
+
+/** 表结构信息（懒加载，仅表名；列在展开时再取） */
 export interface TableHint {
   name: string
-  columns: { name: string; type: string }[]
 }
 
 /** Schema 提示响应 */
 export interface SchemaHints {
-  tables: TableHint[]
+  tables: string[]
+}
+
+/** 列信息（懒加载单表字段） */
+export interface ColumnInfo {
+  columnName: string
+  columnType: string
+  columnLength?: number
+  isNullable?: number
+  isPrimaryKey?: number
+  description?: string
+}
+
+/** 字段元数据标注（来自元数据中心） */
+export interface ColumnMetaAnnotation {
+  columnName?: string
+  bizName?: string
+  dictTypeName?: string
+  sensitiveLevel?: number
+  description?: string
 }
 
 /** SQL 补全 */
@@ -55,9 +87,24 @@ export function sqlParse(sql: string) {
   return post<SqlParseResult>('/query/onesql/parse', { sql })
 }
 
-/** 获取数据源 Schema 提示 */
+/** SQL 健康诊断 */
+export function sqlDiagnose(sql: string, datasourceId?: string, databaseName?: string) {
+  return post<SqlDiagnoseResult>('/query/onesql/diagnose', { sql, datasourceId, databaseName })
+}
+
+/** 执行计划 EXPLAIN */
+export function sqlExplain(datasourceId: string, sql: string, databaseName?: string) {
+  return post<QueryResult>('/query/onesql/explain', { datasourceId, databaseName, sql })
+}
+
+/** 获取数据源 Schema 提示（懒加载，仅表名） */
 export function getSchemaHints(datasourceId: string, databaseName?: string) {
   return get<SchemaHints>('/query/onesql/hints', { datasourceId, databaseName })
+}
+
+/** 懒加载获取单表字段 */
+export function getTableColumns(datasourceId: string, table: string, databaseName?: string) {
+  return get<ColumnInfo[]>('/query/onesql/columns', { datasourceId, databaseName, table })
 }
 
 /** 查询历史（复用原有接口） */

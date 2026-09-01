@@ -155,6 +155,32 @@ public class MetadataService {
 
     // ---------- 字段治理 ----------
 
+    /**
+     * 按数据源+库+表名获取字段及元数据标注（业务名/字典/敏感级），供 OneSQL Schema 懒加载使用。
+     */
+    public List<MetaColumn> tableColumns(String datasourceId, String database, String tableName) {
+        if (StrUtil.isBlank(datasourceId) || StrUtil.isBlank(tableName)) {
+            return new ArrayList<>();
+        }
+        MetaDatabase db = databaseMapper.selectOne(new LambdaQueryWrapper<MetaDatabase>()
+                .eq(MetaDatabase::getDatasourceId, datasourceId)
+                .eq(StrUtil.isNotBlank(database), MetaDatabase::getDatabaseName, database)
+                .last("limit 1"));
+        if (db == null) {
+            return new ArrayList<>();
+        }
+        MetaTable table = tableMapper.selectOne(new LambdaQueryWrapper<MetaTable>()
+                .eq(MetaTable::getDatabaseId, db.getId())
+                .eq(MetaTable::getTableName, tableName)
+                .last("limit 1"));
+        if (table == null) {
+            return new ArrayList<>();
+        }
+        return columnMapper.selectList(new LambdaQueryWrapper<MetaColumn>()
+                .eq(MetaColumn::getTableId, table.getId())
+                .orderByAsc(MetaColumn::getSortOrder));
+    }
+
     /** 更新字段业务元数据（业务名/业务说明/字典关联），采集时不会被覆盖 */
     public void updateColumn(String id, MetaColumn patch) {
         MetaColumn exist = columnMapper.selectById(id);

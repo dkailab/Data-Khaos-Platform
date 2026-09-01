@@ -36,6 +36,11 @@ export function pageMetaColumns(params: Record<string, any>) {
   return get<PageResult<MetaColumn>>('/meta/column/page', params)
 }
 
+/** 按数据源+库+表获取字段及元数据标注（业务名/字典/敏感级） */
+export function getTableColumnAnnotations(datasourceId: string, table: string, database?: string) {
+  return get<MetaColumn[]>(`/meta/table-columns`, { datasourceId, database, table })
+}
+
 /** 更新字段业务元数据（业务名/说明/字典关联/敏感级） */
 export function updateMetaColumn(id: string, data: MetaColumn) {
   return put<void>(`/meta/column/${id}`, data)

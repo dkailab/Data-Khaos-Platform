@@ -78,6 +78,14 @@ public class MetadataController {
         return R.ok(metadataService.columnPage(current, size, tableId));
     }
 
+    @Operation(summary = "按数据源+库+表获取字段及元数据标注（业务名/字典/敏感级）")
+    @GetMapping("/table-columns")
+    public R<List<MetaColumn>> tableColumns(@RequestParam String datasourceId,
+                                            @RequestParam(required = false) String database,
+                                            @RequestParam String table) {
+        return R.ok(metadataService.tableColumns(datasourceId, database, table));
+    }
+
     @Operation(summary = "更新字段业务元数据（业务名/说明/字典关联）")
     @PutMapping("/column/{id}")
     public R<Void> updateColumn(@PathVariable String id, @RequestBody MetaColumn patch) {
