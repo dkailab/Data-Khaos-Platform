@@ -58,12 +58,12 @@ export const useModuleStore = defineStore('module', () => {
     }),
   }))
 
-  /** 加载全部模块配置（管理员配置页用；同时判定 canConfig） */
+  /** 加载完整配置，以便区分隐藏功能与尚未配置的新功能。 */
   async function loadConfig(capabilityFlags?: string[]) {
     const list = await getModuleConfigList()
     configList.value = list || []
     loaded.value = true
-    canConfig.value = !!(capabilityFlags && capabilityFlags.includes('module:config'))
+    if (capabilityFlags) canConfig.value = capabilityFlags.includes('module:config')
     return list
   }
 

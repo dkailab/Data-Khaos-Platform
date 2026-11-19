@@ -96,7 +96,7 @@
           </el-form-item>
         </el-form>
 
-        <div class="form-copyright">© 2026 Data-Khaos-Platform · 数据安全 · 权限可控</div>
+        <div class="form-copyright">© 2026 dkailab</div>
       </div>
     </div>
   </div>
@@ -200,7 +200,7 @@ onMounted(() => {
   width: 46%;
   min-width: 420px;
   overflow: hidden;
-  background: linear-gradient(160deg, #165dff 0%, #0e42d2 100%);
+  background: linear-gradient(160deg, var(--dk-primary) 0%, var(--dk-primary-hover) 100%);
   color: #fff;
 }
 .brand-bg {
@@ -310,7 +310,7 @@ onMounted(() => {
 }
 .forgot-link {
   font-size: 14px;
-  color: #165dff;
+  color: var(--dk-primary);
   cursor: pointer;
   user-select: none;
 }
@@ -322,8 +322,8 @@ onMounted(() => {
   height: 44px;
   font-size: 16px;
   letter-spacing: 0.2em;
-  background: #165dff;
-  border-color: #165dff;
+  background: var(--dk-primary);
+  border-color: var(--dk-primary);
 }
 .login-btn:hover {
   background: #4080ff;
@@ -338,7 +338,7 @@ onMounted(() => {
 
 /* 聚焦柔和高亮，禁止刺眼 */
 .login-page :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 1px #165dff inset;
+  box-shadow: 0 0 0 1px var(--dk-primary) inset;
 }
 
 /* ---------- 响应式：移动端上下布局，隐藏左侧品牌区 ---------- */

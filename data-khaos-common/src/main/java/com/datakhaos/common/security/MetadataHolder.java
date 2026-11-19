@@ -39,6 +39,11 @@ public class MetadataHolder {
                 || (user.getRoles() != null && user.getRoles().contains(CommonConstants.SUPER_ADMIN));
     }
 
+    /** 当前请求来自内部编排客户端。服务端口应仅供受信网络访问。 */
+    public static boolean isSystemCaller() {
+        return CommonConstants.DEFAULT_ADMIN_ID.equals(getUserId()) && "system".equals(getUsername());
+    }
+
     public static void clear() {
         CONTEXT.remove();
     }

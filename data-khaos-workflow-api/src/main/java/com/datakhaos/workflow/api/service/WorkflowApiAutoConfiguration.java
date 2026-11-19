@@ -1,0 +1,22 @@
+package com.datakhaos.workflow.api.service;
+
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.web.client.RestTemplate;
+
+/**
+ * 工作流客户端自动装配（依赖 common 提供的 orchestrationRestTemplate）。
+ */
+@AutoConfiguration
+@ConditionalOnClass(name = {"jakarta.servlet.Filter", "org.springframework.cloud.client.loadbalancer.LoadBalanced"})
+public class WorkflowApiAutoConfiguration {
+
+    @Bean
+    @ConditionalOnMissingBean
+    public WorkflowApiClient workflowApiClient(@Qualifier("orchestrationRestTemplate") RestTemplate restTemplate) {
+        return new WorkflowApiClient(restTemplate);
+    }
+}

@@ -67,8 +67,13 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
         String uid = JwtUtil.getUid(token, properties.getSecret());
         String username = JwtUtil.getUsername(token, properties.getSecret());
         ServerHttpRequest mutated = request.mutate()
-                .header(CommonConstants.HEADER_USER_ID, uid == null ? "" : uid)
-                .header(CommonConstants.HEADER_USERNAME, username == null ? "" : username)
+                .headers(headers -> {
+                    headers.set(CommonConstants.HEADER_USER_ID, uid == null ? "" : uid);
+                    headers.set(CommonConstants.HEADER_USERNAME, username == null ? "" : username);
+                    headers.remove(CommonConstants.HEADER_ROLES);
+                    headers.remove(CommonConstants.HEADER_PERMISSIONS);
+                    headers.remove(CommonConstants.HEADER_REAL_NAME);
+                })
                 .build();
         return chain.filter(exchange.mutate().request(mutated).build());
     }

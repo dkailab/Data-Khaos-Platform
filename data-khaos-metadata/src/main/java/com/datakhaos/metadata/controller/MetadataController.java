@@ -2,10 +2,12 @@ package com.datakhaos.metadata.controller;
 
 import com.datakhaos.common.model.PageResult;
 import com.datakhaos.common.model.R;
+import com.datakhaos.metadata.dto.AssetTable;
 import com.datakhaos.metadata.entity.MetaColumn;
 import com.datakhaos.metadata.entity.MetaDatabase;
 import com.datakhaos.metadata.entity.MetaTable;
 import com.datakhaos.metadata.entity.MetaTableLineage;
+import com.datakhaos.metadata.service.AssetCatalogService;
 import com.datakhaos.metadata.service.MetadataService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -25,6 +27,26 @@ import java.util.Map;
 public class MetadataController {
 
     private final MetadataService metadataService;
+    private final AssetCatalogService assetCatalog;
+
+    @GetMapping("/assets")
+    public R<PageResult<AssetTable>> assets(@RequestParam(required = false) String q,
+                                           @RequestParam(defaultValue = "1") long current,
+                                           @RequestParam(defaultValue = "20") long size) {
+        return R.ok(assetCatalog.search(q, current, size));
+    }
+
+    @GetMapping("/assets/{id}")
+    public R<AssetCatalogService.Detail> asset(@PathVariable String id) {
+        return R.ok(assetCatalog.detail(id));
+    }
+
+    @GetMapping("/assets/{id}/fields")
+    public R<PageResult<MetaColumn>> assetFields(@PathVariable String id,
+                                                @RequestParam(defaultValue = "1") long current,
+                                                @RequestParam(defaultValue = "20") long size) {
+        return R.ok(assetCatalog.fields(id, current, size));
+    }
 
     @Operation(summary = "全量同步数据源元数据")
     @PostMapping("/sync/{datasourceId}")

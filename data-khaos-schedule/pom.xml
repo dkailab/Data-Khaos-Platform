@@ -52,6 +52,14 @@
             <groupId>com.datakhaos</groupId>
             <artifactId>data-khaos-datasource-api</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.datakhaos</groupId>
+            <artifactId>data-khaos-workflow-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.datakhaos</groupId>
+            <artifactId>data-khaos-pipeline-api</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

@@ -20,7 +20,7 @@
 | Lombok | provided 作用域 | 全模块共享，不打包进 jar |
 | 数据库 | 开发 MySQL 8 / 生产达梦 DM8 | 通过 `data-khaos.mybatis.db-type` 切换方言 |
 
-所有版本号在根 [pom.xml](file:///Users/dk/Documents/data-khaos/data-khaos/pom.xml) 的 `<properties>` / `<dependencyManagement>` 中统一声明，**禁止在子模块写死版本**。
+所有版本号在根 [pom.xml](../pom.xml) 的 `<properties>` / `<dependencyManagement>` 中统一声明，**禁止在子模块写死版本**。
 
 ---
 
@@ -77,7 +77,7 @@ public R<Foo> foo(@PathVariable String id) {
 
 ### 3.2 状态码 `ResultCode`
 
-已定义的状态码见 [ResultCode.java](file:///Users/dk/Documents/data-khaos/data-khaos/data-khaos-common/src/main/java/com/datakhaos/common/model/ResultCode.java)。**优先复用，不新增散落数字**：
+已定义的状态码见 [ResultCode.java](../data-khaos-common/src/main/java/com/datakhaos/common/model/ResultCode.java)。**优先复用，不新增散落数字**：
 
 | code | 含义 |
 |------|------|
@@ -133,7 +133,7 @@ public class VisualDashboard extends BaseEntity {
 
 - 主键：雪花算法 `@TableId(type = IdType.ASSIGN_ID)`，类型 `String`，对应库表 `VARCHAR(32)`（避免达梦自增序列性能问题）
 - `createTime` 由 `BaseEntity` 提供并自动填充（INSERT）
-- `updateTime` **仅当表含该列时**在子类补充，配 `@TableField(fill = FieldFill.INSERT_UPDATE)`（填充逻辑见 [MybatisPlusConfig.java](file:///Users/dk/Documents/data-khaos/data-khaos/data-khaos-common/src/main/java/com/datakhaos/common/config/MybatisPlusConfig.java)）
+- `updateTime` **仅当表含该列时**在子类补充，配 `@TableField(fill = FieldFill.INSERT_UPDATE)`（填充逻辑见 [MybatisPlusConfig.java](../data-khaos-common/src/main/java/com/datakhaos/common/config/MybatisPlusConfig.java)）
 - 必须 `@EqualsAndHashCode(callSuper = true)`，否则继承字段不参与 equals/hashCode
 
 ### 4.2 通用字段约定
@@ -172,7 +172,7 @@ throw new BusinessException(ResultCode.NOT_FOUND, "版本不存在: " + id); // 
 
 ### 5.2 全局异常处理器
 
-[GlobalExceptionHandler.java](file:///Users/dk/Documents/data-khaos/data-khaos/data-khaos-common/src/main/java/com/datakhaos/common/exception/GlobalExceptionHandler.java) 已统一处理：
+[GlobalExceptionHandler.java](../data-khaos-common/src/main/java/com/datakhaos/common/exception/GlobalExceptionHandler.java) 已统一处理：
 - `BusinessException` → 返回其 code/msg
 - 参数校验异常（`MethodArgumentNotValidException` / `BindException` / `ConstraintViolationException`）→ 400
 - `IllegalArgumentException` → 400
@@ -209,7 +209,7 @@ public class VisualController {
 约定：
 - 类注解 `@RestController` + `@RequestMapping("/api/<service>")` + `@Tag` + `@RequiredArgsConstructor`（**构造器注入**，禁止 `@Autowired` 字段注入）
 - 方法注解 `@Operation(summary = "...")`，**每个接口必须有**，用于 Knife4j 文档
-- 路径前缀必须与网关路由一致（见 [application.yml](file:///Users/dk/Documents/data-khaos/data-khaos/data-khaos-gateway/src/main/resources/application.yml)，如 `/api/visual/**` → visual 服务）
+- 路径前缀必须与网关路由一致（见 [application.yml](../data-khaos-gateway/src/main/resources/application.yml)，如 `/api/visual/**` → visual 服务）
 - RESTful 语义：GET 查询 / POST 新增 / PUT 修改 / DELETE 删除；有 id 则更新的"新增或修改"用 POST
 - 资源路径用名词复数，`{id}` 走 `@PathVariable`，查询参数走 `@RequestParam`
 - 复杂请求体用 `@RequestBody DTO`，**不要**直接暴露 entity 时另议（当前项目部分直接用了 entity，新代码优先用 DTO）
@@ -274,7 +274,7 @@ public R<QueryResult> executeRaw(String dsId, String sql) {
 1. 建 `data-khaos-xxx-api`，包 `com.datakhaos.xxx.api`
 2. 只放 `model/`（DTO）、可选 `service/`（Client）、`*AutoConfiguration.java`
 3. 配 `resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 注册装配类
-4. Client 注入 `@Qualifier("lbRestTemplate") RestTemplate`，加 `@ConditionalOnMissingBean`（参考 [DatasourceApiClient / DatasourceApiAutoConfiguration](file:///Users/dk/Documents/data-khaos/data-khaos/data-khaos-datasource-api/src/main/java/com/datakhaos/datasource/api/connector/DatasourceApiAutoConfiguration.java)）
+4. Client 注入 `@Qualifier("lbRestTemplate") RestTemplate`，加 `@ConditionalOnMissingBean`（参考 [DatasourceApiClient / DatasourceApiAutoConfiguration](../data-khaos-datasource-api/src/main/java/com/datakhaos/datasource/api/connector/DatasourceApiAutoConfiguration.java)）
 
 ---
 
@@ -338,7 +338,7 @@ if (permissionCheck && !MetadataHolder.isSuperAdmin() && StrUtil.isNotBlank(user
 
 自 v1.0.0 起，新增 **组织(业务线) → 项目组 → 人** 三级模型。人加入项目组即获得组内角色能力位（操作权限）与组下资源（数据权限）。
 
-**关键表**（见 [mysql-init.sql](file:///Users/dk/Documents/data-khaos/data-khaos/db/mysql-init.sql)）：
+**关键表**（见 [mysql-init.sql](../db/mysql-init.sql)）：
 
 | 表 | 作用 |
 |---|---|
@@ -347,7 +347,7 @@ if (permissionCheck && !MetadataHolder.isSuperAdmin() && StrUtil.isNotBlank(user
 | `sg_project_role` | 组角色（`capability_flags` 为**能力位 JSON 数组**；`project_group_id` 空=全局模板） |
 | `sg_project_group_resource` | 组下资源（`resource_type` TASK/REPORT/TABLE） |
 
-**能力位合并**：用户当前项目组角色的 `capability_flags` 并入 `UserPermissionDto.permissions`，供前端显隐菜单/按钮。相关实现见 [ProjectGroupService.java](file:///Users/dk/Documents/data-khaos/data-khaos/data-khaos-permission/src/main/java/com/datakhaos/permission/service/ProjectGroupService.java)：
+**能力位合并**：用户当前项目组角色的 `capability_flags` 并入 `UserPermissionDto.permissions`，供前端显隐菜单/按钮。相关实现见 [ProjectGroupService.java](../data-khaos-permission/src/main/java/com/datakhaos/permission/service/ProjectGroupService.java)：
 
 ```java
 // 当前项目组上下文（主组，无则取第一个）
@@ -355,7 +355,7 @@ ProjectGroupDto current = projectGroupService.getCurrentProjectGroup(userId);
 List<String> flags = projectGroupService.getCapabilityFlags(userId, current.getId());
 ```
 
-**表权限主体取并集**：`sys_table_permission` 支持 `user_id`（个人）+ `role_id`（角色）+ `project_group_id`（项目组）三种主体，判定时取**并集**；个人授权优先级最高（用于收敛/放行个别成员）。已集成进 [TablePermissionService.java](file:///Users/dk/Documents/data-khaos/data-khaos/data-khaos-permission/src/main/java/com/datakhaos/permission/service/TablePermissionService.java) 的 `check` / `getUserTablePermissions`。
+**表权限主体取并集**：`sys_table_permission` 支持 `user_id`（个人）+ `role_id`（角色）+ `project_group_id`（项目组）三种主体，判定时取**并集**；个人授权优先级最高（用于收敛/放行个别成员）。已集成进 [TablePermissionService.java](../data-khaos-permission/src/main/java/com/datakhaos/permission/service/TablePermissionService.java) 的 `check` / `getUserTablePermissions`。
 
 **能力位清单**（`org_id` 空表 `capability_flags` 模板）：`meta:browse`、`query:execute`、`table:manage`、`model:develop/publish/browse`、`report:develop/publish/browse`、`task:develop/schedule`、`approval:apply/approve`、`pg:manage`。
 
@@ -394,7 +394,7 @@ boolean isAdmin = MetadataHolder.isSuperAdmin();
 ## 11. 网关约定
 
 - 网关基于 **Spring Cloud Gateway（WebFlux）**，无 servlet，不引入 mybatis/lbRestTemplate
-- 路由：`/api/<service>/**` → `lb://<服务注册名>`，见 [application.yml](file:///Users/dk/Documents/data-khaos/data-khaos/data-khaos-gateway/src/main/resources/application.yml)
+- 路由：`/api/<service>/**` → `lb://<服务注册名>`，见 [application.yml](../data-khaos-gateway/src/main/resources/application.yml)
 - 鉴权：新增**公开接口**需加入 `AuthGlobalFilter.WHITE_LIST`（如登录、验证码）；其余默认校验 JWT
 - 限流：`/api/query/**` 已接 Redis `RequestRateLimiter`（默认 10 req/s），新增高频接口可仿照
 - 新增服务时：网关加路由 + 服务自身 `@RequestMapping("/api/<service>")` + knife4j 文档统一经网关 `/doc.html` 聚合
@@ -404,7 +404,7 @@ boolean isAdmin = MetadataHolder.isSuperAdmin();
 ## 12. 配置与部署约定
 
 - 配置走 `application.yml`，敏感项用环境变量占位带默认值：`${JWT_SECRET:default}`、`${MYSQL_HOST:127.0.0.1}`
-- 服务端口：开发环境见 [docker-compose.yml](file:///Users/dk/Documents/data-khaos/data-khaos/docker/docker-compose.yml)；网关对外端口变更需**同步**前端 `vite.config.ts` 代理、`smoke-test.sh`、各文档
+- 服务端口：开发环境见 [docker-compose.yml](../docker/docker-compose.yml)；网关对外端口变更需**同步**前端 `vite.config.ts` 代理、`smoke-test.sh`、各文档
 - 数据库方言切换：`data-khaos.mybatis.db-type`（MYSQL/DM）
 - 生产达梦：`mvn clean install -Pprod` 引入 `DmJdbcDriver18`
 

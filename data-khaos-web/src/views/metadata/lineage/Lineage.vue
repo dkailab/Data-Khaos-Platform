@@ -102,13 +102,17 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { MagicStick, Plus, Search } from '@element-plus/icons-vue'
 import { analyzeSqlLineage, getLineage, listMetaDatabases, pageMetaTables, saveLineage } from '@/api/metadata'
 import { pageDatasources } from '@/api/datasource'
 import type { MetaTable, MetaTableLineage } from '@/types'
+
+const route = useRoute()
+const router = useRouter()
 
 const keyword = ref('')
 const searching = ref(false)
@@ -138,6 +142,18 @@ const sqlForm = reactive({
   datasourceId: '',
   database: '',
   sql: '',
+})
+
+watch(() => route.query.mode, mode => {
+  sqlVisible.value = mode === 'sql'
+  lineageVisible.value = mode === 'manual'
+}, { immediate: true })
+
+watch([sqlVisible, lineageVisible], ([sqlOpen, manualOpen]) => {
+  if (!sqlOpen && !manualOpen && (route.query.mode === 'sql' || route.query.mode === 'manual')) {
+    const { mode: _, ...query } = route.query
+    router.replace({ path: route.path, query, hash: route.hash })
+  }
 })
 
 async function loadDatasources() {

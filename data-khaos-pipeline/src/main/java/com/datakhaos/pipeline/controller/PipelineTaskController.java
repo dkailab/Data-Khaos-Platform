@@ -62,8 +62,11 @@ public class PipelineTaskController {
 
     @Operation(summary = "手动触发运行")
     @PostMapping("/{id}/run")
-    public R<PipelineInstance> run(@PathVariable String id) {
-        return R.ok(taskService.run(id));
+    public R<PipelineInstance> run(@PathVariable String id,
+                                   @RequestParam(defaultValue = "MANUAL") String triggerType,
+                                   @RequestParam(required = false) String workflowRunId,
+                                   @RequestParam(required = false) String workflowNodeRunId) {
+        return R.ok(taskService.run(id, triggerType, workflowRunId, workflowNodeRunId));
     }
 
     @Operation(summary = "引擎列表（可扩展）")

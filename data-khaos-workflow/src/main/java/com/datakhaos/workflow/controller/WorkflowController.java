@@ -1,5 +1,6 @@
 package com.datakhaos.workflow.controller;
 
+import com.datakhaos.common.security.MetadataHolder;
 import com.datakhaos.common.model.R;
 import com.datakhaos.common.model.PageResult;
 import com.datakhaos.workflow.dto.WorkflowGraphRequest;
@@ -69,8 +70,16 @@ public class WorkflowController {
     /** 触发一次手动运行 */
     @PostMapping("/{id}/trigger")
     public R<String> trigger(@PathVariable String id,
-                             @RequestBody(required = false) Map<String, Object> params) {
-        String runId = workflowService.trigger(id, params, "MANUAL");
+                             @RequestBody(required = false) Map<String, Object> params,
+                             @RequestParam(defaultValue = "MANUAL") String triggerType,
+                             @RequestParam(required = false) String scheduleJobId,
+                             @RequestParam(required = false) String scheduleLogId) {
+        if (!"MANUAL".equals(triggerType) || scheduleJobId != null || scheduleLogId != null) {
+            if (!MetadataHolder.isSystemCaller()) {
+                throw new com.datakhaos.common.exception.BusinessException("内部工作流触发需要系统身份");
+            }
+        }
+        String runId = workflowService.trigger(id, params, triggerType, scheduleJobId, scheduleLogId);
         return R.ok("触发成功", runId);
     }
 
@@ -80,6 +89,15 @@ public class WorkflowController {
                                         @RequestParam(defaultValue = "1") long current,
                                         @RequestParam(defaultValue = "10") long size) {
         return R.ok(workflowService.runPage(wfId, current, size));
+    }
+
+    /** 触发请求异常后按调度日志确认是否已受理。 */
+    @GetMapping("/{id}/run/by-schedule-log/{scheduleLogId}")
+    public R<WorkflowRun> byScheduleLog(@PathVariable String id, @PathVariable String scheduleLogId) {
+        if (!MetadataHolder.isSystemCaller()) {
+            throw new com.datakhaos.common.exception.BusinessException("按调度日志反查运行需要系统身份");
+        }
+        return R.ok(workflowService.latestRunByScheduleLog(id, scheduleLogId));
     }
 
     /** 运行实例详情 */

@@ -26,12 +26,20 @@ public class PipelineRunner {
 
     /** 创建运行实例 */
     public PipelineInstance createInstance(PipelineTask task, String triggerType) {
+        return createInstance(task, triggerType, null, null);
+    }
+
+    /** 创建运行实例（带工作流关联ID） */
+    public PipelineInstance createInstance(PipelineTask task, String triggerType,
+                                          String workflowRunId, String workflowNodeRunId) {
         PipelineInstance instance = new PipelineInstance();
         instance.setTaskId(task.getId());
         instance.setEngine(task.getEngine());
         instance.setTriggerType(triggerType);
         instance.setStatus(0);
         instance.setStartTime(LocalDateTime.now());
+        instance.setWorkflowRunId(workflowRunId);
+        instance.setWorkflowNodeRunId(workflowNodeRunId);
         instanceMapper.insert(instance);
         return instance;
     }

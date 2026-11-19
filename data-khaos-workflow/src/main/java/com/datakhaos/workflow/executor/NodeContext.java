@@ -33,4 +33,10 @@ public class NodeContext {
 
     /** 超时（秒），0/空 表示使用默认 */
     private Long timeoutSeconds;
+
+    /** 所属工作流运行ID（供 PIPELINE 节点回填关联） */
+    private String runId;
+
+    /** 当前节点运行记录ID（供 PIPELINE 节点回填关联） */
+    private String nodeRunId;
 }

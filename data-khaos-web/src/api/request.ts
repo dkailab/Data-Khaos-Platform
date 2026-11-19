@@ -42,7 +42,8 @@ function toLogin() {
   }
   // 强制跳转到登录页
   if (window.location.pathname !== '/login') {
-    window.location.href = '/login'
+    const returnTo = window.location.pathname + window.location.search + window.location.hash
+    window.location.href = '/login?redirect=' + encodeURIComponent(returnTo)
   }
 }
 
@@ -59,7 +60,7 @@ service.interceptors.response.use(
         return res.data as any
       }
       ElMessage.error(res.msg || '操作失败')
-      if (res.code === 401 || res.code === 4010 || res.code === 4011 || res.code === 403) {
+      if (res.code === 401 || res.code === 4010 || res.code === 4011) {
         toLogin()
       }
       return Promise.reject(new Error(res.msg || '请求失败'))
@@ -67,6 +68,7 @@ service.interceptors.response.use(
     return res
   },
   (error) => {
+    if (axios.isCancel(error)) return Promise.reject(error)
     const status = error.response?.status
     const data = error.response?.data
     if (status === 401) {

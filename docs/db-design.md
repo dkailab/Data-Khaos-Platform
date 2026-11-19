@@ -79,3 +79,7 @@
 | notify_template | 消息模板 | notification |
 | notify_record | 推送记录 | notification |
 | notify_subscription | 用户订阅 | notification |
+
+## 元数据治理演示
+
+先导入 [订单示例](../db/seed-demo.sql)，再导入[治理示例](../db/seed-governance.sql)。治理脚本提供渠道、类目、订单状态和敏感级别字典，以及金额、数量与枚举标准，可用来验证字段说明、字典绑定和落标检查。

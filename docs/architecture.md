@@ -1,24 +1,16 @@
 # Data Khaos 架构设计文档
 
-## 1. 总体架构
+## 系统分层
 
-Data Khaos 采用微服务架构，基于 Spring Cloud 技术栈。整体分为四层：
+| 层 | 组成与职责 |
+| --- | --- |
+| 运行基础设施 | MySQL、Redis、Nacos；Hive/HDFS 与外部引擎按部署场景启用。 |
+| 数据工程 | datasource 管理连接和 JDBC SPI；pipeline 进行同步；schedule 触发任务；workflow 运行 DAG。 |
+| 治理与权限 | metadata 管理目录、资产与血缘；dquality 负责规则、执行和快照；auth、permission、approval 管理身份与授权。 |
+| 数据服务 | query 提供 SQL 工作台，mart 提供模型、指标和语义查询。 |
+| 体验 | data-khaos-web 提供门户、数据地图和业务工作区；visual 提供 BI 数据集、图表和仪表板。 |
 
-### 1.1 基础设施层
-
-提供底层支撑能力，包含数据库、缓存、消息队列、注册中心等。
-
-### 1.2 数据接入层
-
-通过 SPI 机制抽象数据源连接器，支持多种数据湖/仓的接入。
-
-### 1.3 服务层
-
-包含核心业务服务：认证、权限、审批、元数据、集市、查询、可视化、调度、推送。
-
-### 1.4 应用层
-
-提供用户交互界面：仪表板、分析板、数据门户、系统管理。
+Controller → Service → Mapper。跨服务通过归属模块的 `*-api` 客户端调用；跨域关系通过资产 ID、模型 ID 和运行 ID 关联。平台 API 是 BI 的数据边界。
 
 ## 2. 服务划分
 
@@ -35,11 +27,14 @@ Data Khaos 采用微服务架构，基于 Spring Cloud 技术栈。整体分为�
 | data-khaos-visual | 8088 | 可视化服务 |
 | data-khaos-schedule | 8089 | 调度服务 |
 | data-khaos-notification | 8090 | 推送服务 |
+| data-khaos-dquality | 8091 | 数据质量 |
+| data-khaos-pipeline | 8092 | 数据同步 |
+| data-khaos-workflow | 8093 | 工作流编排 |
 
 ## 3. 通信方式
 
-- **服务间同步调用**: OpenFeign（内部 API）
-- **服务间异步通信**: RocketMQ（事件驱动）
+- **服务间同步调用**：Nacos 服务发现与负载均衡 REST 客户端
+- **任务执行**：调度触发工作流和管道，按运行实例跟踪状态
 - **前端 → 后端**: RESTful API（通过网关）
 
 ## 4. 安全架构
@@ -51,17 +46,12 @@ Data Khaos 采用微服务架构，基于 Spring Cloud 技术栈。整体分为�
 - Gateway 层负责 JWT Token 的校验
 - Auth 服务负责 Token 的签发与刷新
 - Permission 服务负责 RBAC + 行/列权限的校验
-- 权限校验通过注解 + AOP 切面实现
+- 数据地图在 metadata 服务中按表授权过滤搜索、详情与直接血缘。运行态权限由各业务服务执行。
 
-## 5. 数据架构
+## PaaS 与 BI 演进
 
-```
-数据湖 → 数据接入 → 元数据中心 → 数据集市 → 可视化/查询
-                                          ↓
-                                    调度系统(定时同步)
-```
+当前同仓构建。未来先将 BI 的预览、下钻、导出、刷新收敛到平台授权与查询接口，再独立部署 visual 和 BI Web。平台保留 mart、OneSQL、治理和数据工程，BI 拥有数据集配置、图表和仪表板。
 
-- 数据湖（星环/Hive/Doris）通过数据源接入层统一管理
-- 元数据中心采集并存储库表结构信息
-- 数据集市基于模型定义进行数据建模
-- 调度系统负责定时同步和刷新集市数据
+拆分时先在同仓验证独立构建、schema 迁移、稳定 ID、旧链接和回退，再决定是否迁仓。跨部署使用版本化 API 和兼容矩阵。仓库采用 Apache-2.0，商业扩展边界待确定。
+
+界面入口见 [UI 规范](paas-ui-design.md)，工程方向见[平台路线图](big-data-platform-roadmap.md)。

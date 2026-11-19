@@ -72,3 +72,30 @@ export function analyzeSqlLineage(datasourceId: string, database: string, sql: s
     params: { datasourceId, database, sql },
   })
 }
+
+export interface AssetTable {
+  id: string
+  datasourceId: string
+  databaseName: string
+  tableName: string
+  tableType?: string
+  description?: string
+  syncTime?: string
+}
+
+export interface AssetDetail {
+  table: AssetTable
+  relations: { table: AssetTable; upstream: boolean; type?: string }[]
+}
+
+export function searchAssets(q: string, current: number, signal?: AbortSignal) {
+  return get<PageResult<AssetTable>>('/meta/assets', { q: q || undefined, current, size: 20 }, { signal })
+}
+
+export function getAsset(id: string, signal?: AbortSignal) {
+  return get<AssetDetail>(`/meta/assets/${encodeURIComponent(id)}`, undefined, { signal })
+}
+
+export function pageAssetFields(id: string, current: number, signal?: AbortSignal) {
+  return get<PageResult<MetaColumn>>(`/meta/assets/${encodeURIComponent(id)}/fields`, { current, size: 20 }, { signal })
+}

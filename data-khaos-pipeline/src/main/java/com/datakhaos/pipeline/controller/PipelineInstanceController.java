@@ -1,5 +1,6 @@
 package com.datakhaos.pipeline.controller;
 
+import com.datakhaos.common.security.MetadataHolder;
 import com.datakhaos.common.model.PageResult;
 import com.datakhaos.common.model.R;
 import com.datakhaos.pipeline.entity.PipelineInstance;
@@ -41,5 +42,15 @@ public class PipelineInstanceController {
     @GetMapping("/task/{taskId}")
     public R<List<PipelineInstance>> byTask(@PathVariable String taskId) {
         return R.ok(instanceService.byTask(taskId));
+    }
+
+    @Operation(summary = "按工作流节点运行ID反查实例（超时确认提交结果）")
+    @GetMapping("/by-node")
+    public R<List<PipelineInstance>> byWorkflowNode(@RequestParam String runId,
+                                                    @RequestParam String nodeRunId) {
+        if (!MetadataHolder.isSystemCaller()) {
+            throw new com.datakhaos.common.exception.BusinessException("按节点反查实例需要系统身份");
+        }
+        return R.ok(instanceService.byWorkflowNode(runId, nodeRunId));
     }
 }

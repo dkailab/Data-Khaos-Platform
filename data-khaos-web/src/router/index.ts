@@ -19,7 +19,19 @@ const routes: RouteRecordRaw[] = [
         path: 'dashboard',
         name: 'Dashboard',
         component: () => import('@/views/dashboard/Dashboard.vue'),
-        meta: { title: '首页' },
+        meta: { title: '数据门户' },
+      },
+      {
+        path: 'assets',
+        name: 'AssetCatalog',
+        component: () => import('@/views/assets/AssetCatalog.vue'),
+        meta: { title: '数据地图' },
+      },
+      {
+        path: 'assets/tables/:tableId',
+        name: 'AssetDetail',
+        component: () => import('@/views/assets/AssetDetail.vue'),
+        meta: { title: '资产详情' },
       },
       // 系统管理
       {
@@ -126,7 +138,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'metadata/search',
         name: 'MetadataSearch',
-        component: () => import('@/views/metadata/search/Search.vue'),
+        redirect: to => ({ name: 'AssetCatalog', query: to.query }),
         meta: { title: '元数据搜索' },
       },
       // 数据治理

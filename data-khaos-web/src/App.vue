@@ -22,23 +22,7 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
-  font-family: 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
-}
-
-/* ============ 浅蓝数据风主题（覆盖 Element Plus 主色变量） ============ */
-:root {
-  --datakhaos-blue: #7fb8e6; /* 低饱和浅天蓝 */
-  --datakhaos-deep: #165dff; /* 深海蓝 */
-  --datakhaos-grayblue: #a9c4dd; /* 浅灰蓝 */
-  --datakhaos-bg: #f7fafc; /* 页面极浅灰蓝背景 */
-
-  --el-color-primary: #165dff;
-  --el-color-primary-light-3: #4590ff;
-  --el-color-primary-light-5: #7fb8e6;
-  --el-color-primary-light-7: #b8d6f2;
-  --el-color-primary-light-8: #d3e6f7;
-  --el-color-primary-light-9: #eaf3fb;
-  --el-color-primary-dark-2: #0e4ad2;
+  font-family: var(--dk-font);
 }
 
 /* ============ 全站水印 ============ */

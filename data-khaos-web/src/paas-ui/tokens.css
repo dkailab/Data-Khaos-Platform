@@ -1,0 +1,83 @@
+/* Import on the page or shell that owns the PaaS interface. */
+.dk-paas {
+  --dk-canvas: #f3f6fc;
+  --dk-surface: #fff;
+  --dk-ink: #1e293b;
+  --dk-secondary: #43536e;
+  --dk-muted: #52627a;
+  --dk-border: #d9e2f0;
+  --dk-soft: #edf2f9;
+  --dk-primary: #215dba;
+  --dk-primary-hover: #174a95;
+  --dk-primary-soft: #e7f0ff;
+  --dk-success: #14724f;
+  --dk-success-soft: #e7f6ee;
+  --dk-danger: #ab3741;
+  --dk-danger-soft: #fcecef;
+  --dk-warning: #855810;
+  --dk-warning-soft: #fff3d7;
+  --dk-sidebar: #f9fbff;
+  --dk-sidebar-text: #4b5c74;
+  --dk-sidebar-ink: #243752;
+  --dk-sidebar-selected: #e7f0ff;
+  --dk-space-1: 4px;
+  --dk-space-2: 8px;
+  --dk-space-3: 12px;
+  --dk-space-4: 16px;
+  --dk-space-5: 20px;
+  --dk-space-6: 24px;
+  --dk-space-8: 32px;
+  --dk-radius-control: 8px;
+  --dk-radius-panel: 10px;
+  --dk-chart-series: #79aaf0;
+  --dk-chart-failure: #bd4d59;
+  --dk-shadow-panel: 0 1px 2px rgb(29 51 86 / 5%);
+  --dk-font: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --dk-mono: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+
+  /* Element Plus controls embedded in migrated PaaS pages. */
+  --el-color-primary: var(--dk-primary);
+  --el-color-primary-light-3: #5486cd;
+  --el-color-primary-light-5: #88ace0;
+  --el-color-primary-light-7: #b1c9eb;
+  --el-color-primary-light-8: #d3e1f5;
+  --el-color-primary-light-9: var(--dk-primary-soft);
+  --el-color-primary-dark-2: var(--dk-primary-hover);
+  --el-text-color-primary: var(--dk-ink);
+  --el-border-color: var(--dk-border);
+
+  color: var(--dk-ink);
+  font: 14px/1.5 var(--dk-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+.dk-paas :focus-visible {
+  outline: 2px solid #2a6bd3;
+  outline-offset: 3px;
+}
+
+.dk-paas .dk-numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+.dk-paas .dk-mono {
+  font-family: var(--dk-mono);
+}
+
+.dk-paas .dk-panel {
+  background: var(--dk-surface);
+  border: 1px solid var(--dk-border);
+  border-radius: var(--dk-radius-panel);
+  box-shadow: var(--dk-shadow-panel);
+}
+
+.dk-paas .dk-link {
+  color: var(--dk-primary);
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.dk-paas .dk-link:hover { text-decoration: underline; }
+.dk-paas .asset-page { display: grid; gap: var(--dk-space-4); }
+.dk-paas .asset-panel { min-width: 0; padding: var(--dk-space-4); }
+.dk-paas .asset-panel .el-pagination { margin-top: var(--dk-space-4); white-space: nowrap; overflow-x: auto; }

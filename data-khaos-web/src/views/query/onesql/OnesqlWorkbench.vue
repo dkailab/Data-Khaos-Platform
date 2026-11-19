@@ -648,7 +648,7 @@ onBeforeUnmount(() => {
   --onesql-gutter: #fafafa;
   --onesql-gutter-fg: #909399;
   --onesql-editor-bg: #ffffff;
-  --onesql-biz: #165dff;
+  --onesql-biz: var(--dk-primary);
 }
 .onesql-layout.theme-dark {
   --onesql-bg: #1e222a;
@@ -669,7 +669,7 @@ onBeforeUnmount(() => {
 
 .onesql-layout {
   display: flex;
-  height: calc(100vh - 60px);
+  height: calc(100dvh - 57px);
   background: var(--onesql-bg);
   color: var(--onesql-fg);
 }

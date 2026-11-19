@@ -62,6 +62,7 @@ docker compose logs -f query   # 跟踪某服务日志
 ## 数据库
 
 - 开发默认使用 **MySQL 8**，`../db/mysql-init.sql` 在首次启动时自动建库建表并写入种子数据（管理员 `admin` / 密码见下）。
+- 新建 MySQL 数据卷会依次执行 `mysql-init.sql`、`migrate-workflow.sql`、`migrate-paas-pr1.sql`。使用已有数据卷时，先核对已执行的迁移，再按顺序补齐缺失脚本。`migrate-paas-pr1.sql` 中的加列操作只执行一次。
 - 生产使用**达梦 DM8**：将 `.env` 中 `MYSQL_HOST/PORT/USERNAME/PASSWORD` 指向达梦实例，并配合 `mvn -Pprod` 构建（引入 `DmJdbcDriver18`）。
 
 > 默认管理员账号：`admin`，密码：`password`（种子数据中的 BCrypt 哈希）。**生产环境务必修改。**

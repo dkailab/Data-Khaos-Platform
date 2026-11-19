@@ -16,4 +16,6 @@ public final class NodeType {
     public static final String PYTHON = "PYTHON";
     /** 数据算子节点（格式化/加工） */
     public static final String DATA_OP = "DATA_OP";
+    /** 管道任务节点（触发 pipeline 并等待完成） */
+    public static final String PIPELINE = "PIPELINE";
 }

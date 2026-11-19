@@ -45,6 +45,12 @@ public class WorkflowRun implements Serializable {
 
     private String errorMessage;
 
+    /** 关联调度任务ID（SCHEDULE 触发时写入） */
+    private String scheduleJobId;
+
+    /** 关联调度执行日志ID（SCHEDULE 触发时写入） */
+    private String scheduleLogId;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 }

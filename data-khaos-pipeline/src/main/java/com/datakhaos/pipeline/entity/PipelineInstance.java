@@ -47,6 +47,12 @@ public class PipelineInstance implements Serializable {
     /** 执行 worker 标识 */
     private String worker;
 
+    /** 关联工作流运行ID（WORKFLOW 触发时写入） */
+    private String workflowRunId;
+
+    /** 关联工作流节点运行ID（WORKFLOW 触发时写入） */
+    private String workflowNodeRunId;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 }

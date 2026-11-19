@@ -17,6 +17,8 @@ import com.datakhaos.workflow.mapper.WorkflowEdgeMapper;
 import com.datakhaos.workflow.mapper.WorkflowNodeMapper;
 import com.datakhaos.workflow.mapper.WorkflowNodeRunMapper;
 import com.datakhaos.workflow.mapper.WorkflowRunMapper;
+import com.datakhaos.pipeline.api.service.PipelineApiClient;
+import jakarta.annotation.Resource;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -52,10 +54,22 @@ public class WorkflowRunner {
     @Qualifier("nodeTaskExecutor")
     private final ThreadPoolTaskExecutor nodeTaskExecutor;
 
+    @Resource(name = "workflowGraphExecutor")
+    private ThreadPoolTaskExecutor graphExecutor;
+
     /**
      * 触发一次工作流运行（异步执行），返回运行实例ID。
      */
     public String trigger(String wfId, String triggerType, Map<String, Object> params, String wfName) {
+        return trigger(wfId, triggerType, params, wfName, null, null);
+    }
+
+    /**
+     * 触发一次工作流运行（异步执行），返回运行实例ID。
+     * 可携带调度关联ID（scheduleJobId / scheduleLogId）用于追溯。
+     */
+    public String trigger(String wfId, String triggerType, Map<String, Object> params, String wfName,
+                          String scheduleJobId, String scheduleLogId) {
         List<WorkflowNode> nodes = nodeMapper.selectList(new LambdaQueryWrapper<WorkflowNode>()
                 .eq(WorkflowNode::getWfId, wfId)
                 .orderByAsc(WorkflowNode::getCreateTime));
@@ -75,6 +89,8 @@ public class WorkflowRunner {
         run.setRunStatus("PENDING");
         run.setCreateTime(now);
         run.setStartTime(now);
+        run.setScheduleJobId(scheduleJobId);
+        run.setScheduleLogId(scheduleLogId);
         runMapper.insert(run);
         String runId = run.getId();
 
@@ -92,7 +108,7 @@ public class WorkflowRunner {
             nodeRuns.put(n.getNodeCode(), nr);
         }
 
-        nodeTaskExecutor.execute(() -> executeGraph(runId, nodes, edges, nodeRuns, params));
+        graphExecutor.execute(() -> executeGraph(runId, nodes, edges, nodeRuns, params));
         return runId;
     }
 
@@ -127,6 +143,10 @@ public class WorkflowRunner {
         }
 
         Set<String> done = ConcurrentHashMap.newKeySet();
+        WorkflowRun currentRun = runMapper.selectById(runId);
+        currentRun.setRunStatus("RUNNING");
+        runMapper.updateById(currentRun);
+        Set<String> started = ConcurrentHashMap.newKeySet();
         AtomicInteger finished = new AtomicInteger(0);
         CountDownLatch latch = new CountDownLatch(nodes.size());
         Object lock = new Object();
@@ -145,7 +165,7 @@ public class WorkflowRunner {
                 String code = ready.poll();
                 nodeTaskExecutor.execute(() ->
                         runOne(runId, code, nodeMap.get(code), nodeRuns.get(code), params,
-                                adj, remaining, ready, done, finished, latch, lock));
+                                adj, remaining, ready, done, started, finished, latch, lock));
             } else {
                 // 无就绪节点：等待运行中的节点完成 / 失败事件推进
                 if (latch.getCount() <= 0) {
@@ -191,13 +211,14 @@ public class WorkflowRunner {
 
     private void runOne(String runId, String code, WorkflowNode node, WorkflowNodeRun nodeRun,
                         Map<String, Object> params, Map<String, List<String>> adj,
-                        Map<String, Integer> remaining, Queue<String> ready, Set<String> done,
+                        Map<String, Integer> remaining, Queue<String> ready, Set<String> done, Set<String> started,
                         AtomicInteger finished, CountDownLatch latch, Object lock) {
         // 幂等保护：已被快速失败标记为 SKIPPED 的节点不再实际执行
         synchronized (lock) {
             if (done.contains(code)) {
                 return;
             }
+            started.add(code);
         }
 
         // 重试策略：最大尝试次数 = retryCount + 1，间隔 retryInterval 秒
@@ -227,16 +248,22 @@ public class WorkflowRunner {
 
                 try {
                     NodeExecutor executor = executorFactory.get(node.getNodeType());
-                    result = executor.execute(buildContext(node, params));
+                    result = executor.execute(buildContext(node, params, runId, nodeRun.getId()));
                     ok = result != null && result.isSuccess();
                     if (ok) {
                         break;
                     }
                     errMsg = "节点执行失败（退出码非 0）";
                     log.warn("节点执行失败，将重试 node={} attempt={}/{}", node.getNodeName(), attempt + 1, maxAttempts);
+                } catch (PipelineApiClient.SubmissionUnconfirmedException e) {
+                    errMsg = truncate(e.getMessage(), 2000);
+                    break;
                 } catch (Throwable e) {
                     ok = false;
                     errMsg = truncate(e.getMessage(), 2000);
+                    if (Thread.currentThread().isInterrupted()) {
+                        break;
+                    }
                     log.warn("节点执行异常，将重试 node={} attempt={}/{}", node.getNodeName(), attempt + 1, maxAttempts, e);
                 }
 
@@ -246,7 +273,8 @@ public class WorkflowRunner {
                         Thread.sleep(intervalMs);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
-                        return;
+                        errMsg = "节点重试等待被中断";
+                        break;
                     }
                 }
             }
@@ -276,13 +304,13 @@ public class WorkflowRunner {
             }
             nodeRunMapper.updateById(nodeRun);
             finished.incrementAndGet();
+            if (!ok) {
+                failFast(runId, adj, ready, done, started, finished, latch, lock);
+            }
             latch.countDown();
         }
 
-        // 成功则推进下游，失败则快速失败跳过剩余节点
-        if (!ok) {
-            failFast(runId, adj, ready, done, finished, latch, lock);
-        } else {
+        if (ok) {
             synchronized (lock) {
                 for (String to : adj.getOrDefault(code, List.of())) {
                     if (done.contains(to)) {
@@ -300,12 +328,12 @@ public class WorkflowRunner {
 
     /** 失败快速跳过：标记所有未完成节点为 SKIPPED 并计数，避免死锁 */
     private void failFast(String runId, Map<String, List<String>> adj,
-                          Queue<String> ready, Set<String> done,
+                          Queue<String> ready, Set<String> done, Set<String> started,
                           AtomicInteger finished, CountDownLatch latch, Object lock) {
         synchronized (lock) {
             ready.clear();
             for (String code : adj.keySet()) {
-                if (done.contains(code)) {
+                if (done.contains(code) || started.contains(code)) {
                     continue;
                 }
                 done.add(code);
@@ -322,7 +350,8 @@ public class WorkflowRunner {
     }
 
     /** 组装节点执行上下文并做 ${param} 替换 */
-    private NodeContext buildContext(WorkflowNode node, Map<String, Object> params) {
+    private NodeContext buildContext(WorkflowNode node, Map<String, Object> params,
+                                     String runId, String nodeRunId) {
         Map<String, Object> config = new HashMap<>();
         if (StrUtil.isNotBlank(node.getConfigJson())) {
             JSONObject obj = JSONUtil.parseObj(node.getConfigJson());
@@ -338,6 +367,8 @@ public class WorkflowRunner {
                 .config(config)
                 .params(params)
                 .timeoutSeconds(node.getTimeout() == null || node.getTimeout() <= 0 ? null : (long) node.getTimeout())
+                .runId(runId)
+                .nodeRunId(nodeRunId)
                 .build();
     }
 

@@ -5,6 +5,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
 /**
@@ -16,6 +18,17 @@ import org.springframework.web.client.RestTemplate;
 @ConditionalOnClass(name = {"jakarta.servlet.Filter", "org.springframework.cloud.client.loadbalancer.LoadBalanced"})
 public class KhaosAutoConfiguration {
 
+    @Bean("orchestrationRestTemplate")
+    @LoadBalanced
+    @ConditionalOnMissingBean(name = "orchestrationRestTemplate")
+    public RestTemplate orchestrationRestTemplate() {
+        var factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(3000);
+        factory.setReadTimeout(5000);
+        return new RestTemplate(factory);
+    }
+
+    @Primary
     @Bean("lbRestTemplate")
     @LoadBalanced
     @ConditionalOnMissingBean(name = "lbRestTemplate")

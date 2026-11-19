@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # ============================================================
 # Data Khaos - 通用 Dockerfile（多阶段构建）
 #
@@ -23,6 +22,8 @@ COPY data-khaos-permission-api/ ./data-khaos-permission-api/
 COPY data-khaos-datasource-api/ ./data-khaos-datasource-api/
 COPY data-khaos-mart-api/     ./data-khaos-mart-api/
 COPY data-khaos-dquality-api/ ./data-khaos-dquality-api/
+COPY data-khaos-pipeline-api/   ./data-khaos-pipeline-api/
+COPY data-khaos-workflow-api/   ./data-khaos-workflow-api/
 COPY data-khaos-gateway/      ./data-khaos-gateway/
 COPY data-khaos-auth/         ./data-khaos-auth/
 COPY data-khaos-permission/   ./data-khaos-permission/

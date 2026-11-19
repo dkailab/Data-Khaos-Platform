@@ -41,6 +41,12 @@ public class ScheduleJob extends BaseEntity {
     /** 参数（JSON） */
     private String params;
 
+    /** 关联对象类型 WORKFLOW/PIPELINE（可空，空时回退 params.workflowId / params.pipelineTaskId） */
+    private String refType;
+
+    /** 关联对象ID（工作流ID 或 管道任务ID） */
+    private String refId;
+
     /** 0:停用 1:启用 */
     private Integer status;
 

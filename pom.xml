@@ -35,6 +35,8 @@
         <module>data-khaos-datasource-api</module>
         <module>data-khaos-mart-api</module>
         <module>data-khaos-dquality-api</module>
+        <module>data-khaos-pipeline-api</module>
+        <module>data-khaos-workflow-api</module>
         <!-- 网关与业务服务 -->
         <module>data-khaos-gateway</module>
         <module>data-khaos-auth</module>
@@ -153,6 +155,16 @@
             <dependency>
                 <groupId>com.datakhaos</groupId>
                 <artifactId>data-khaos-dquality-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.datakhaos</groupId>
+                <artifactId>data-khaos-pipeline-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.datakhaos</groupId>
+                <artifactId>data-khaos-workflow-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

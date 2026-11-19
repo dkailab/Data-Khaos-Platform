@@ -14,6 +14,7 @@ Data Khaos 是一个面向国产化环境的大数据基础设施全栈平台，
 
 - **国产化优先**：基于达梦 DM8 数据库，RocketMQ 消息队列，全链路国产化适配
 - **统一权限体系**：SSO 单点登录 + RBAC + 行级/列级权限 + 组织权限 + 权限审批流
+- **统一门户与数据地图**：按权限查找表和字段，查看直接上下游，进入现有的平台和 BI 功能。
 - **可插拔数据源**：SPI 机制支持星环、Hive、Doris、ClickHouse 等多种数据湖/仓
 - **数据集市与建模**：星型/雪花模型建模，原子指标与衍生指标管理
 - **可视化分析**：仪表板（定时刷新）+ 分析板（实时 OLAP 分析）
@@ -27,7 +28,7 @@ Data Khaos 是一个面向国产化环境的大数据基础设施全栈平台，
 | 数据库 | 达梦 DM8 |
 | 缓存 | Redis |
 | 消息队列 | RocketMQ |
-| 注册中心 | Eureka / Consul |
+| 注册中心 | Nacos |
 | ORM | MyBatis-Plus |
 | 网关 | Spring Cloud Gateway |
 | 前端 | Vue 3 + TypeScript + Element Plus |
@@ -56,21 +57,9 @@ data-khaos/
 └── docs/                      # 架构、数据库、部署运维文档
 ```
 
-## 分阶段实施
-
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| 第一阶段 | 基础架构搭建（common、auth、permission、gateway） | ✅ 已完成 |
-| 第二阶段 | 数据接入与元数据（datasource、metadata、行/列/表权限） | ✅ 已完成 |
-| 第三阶段 | 权限审批与数据集市（approval、mart） | ✅ 已完成 |
-| 第四阶段 | 查询与分析（query、visual） | ✅ 已完成 |
-| 第五阶段 | 调度与推送（schedule、notification） | ✅ 已完成 |
-| 第六阶段 | 集成测试与优化（Docker 部署、冒烟测试、文档） | ✅ 已完成 |
-| 前端 | Vue3 + Element Plus 工程（data-khaos-web） | ✅ 已完成 |
-
 ## 快速开始
 
-> 详细文档请参考 [docs/](docs/) 目录
+> 部署、开发与设计资料统一从[项目文档导航](docs/README.md)进入。
 
 ```bash
 # 1. 一键拉起全部服务（详见 docker/README.md）
@@ -82,6 +71,8 @@ cd docker && docker compose up -d --build
 # 3. 启动前端（开发模式，代理到网关 8099）
 cd ../data-khaos-web && npm install && npm run dev
 ```
+
+启动前端后，打开终端显示的 Vite 地址并访问 `/dashboard`。如未登录，登录成功后会回到门户。点击左上角「产品服务」展开产品目录，选择「数据资产 → 数据地图」进入资产目录。`/paas-preview.html` 是运维样板，页面顶部也可进入数据门户。
 
 ### 环境要求
 

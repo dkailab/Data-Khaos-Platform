@@ -44,4 +44,15 @@ public class PipelineInstanceService {
                 .orderByDesc(PipelineInstance::getStartTime)
                 .last("LIMIT 20"));
     }
+
+    /** 按工作流节点运行ID反查实例（用于超时后确认提交结果，避免重复触发） */
+    public List<PipelineInstance> byWorkflowNode(String workflowRunId, String workflowNodeRunId) {
+        if (cn.hutool.core.util.StrUtil.isBlank(workflowRunId) || cn.hutool.core.util.StrUtil.isBlank(workflowNodeRunId)) {
+            return List.of();
+        }
+        return mapper.selectList(new LambdaQueryWrapper<PipelineInstance>()
+                .eq(PipelineInstance::getWorkflowRunId, workflowRunId)
+                .eq(PipelineInstance::getWorkflowNodeRunId, workflowNodeRunId)
+                .orderByDesc(PipelineInstance::getStartTime));
+    }
 }

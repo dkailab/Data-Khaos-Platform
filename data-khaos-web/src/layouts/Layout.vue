@@ -1,384 +1,171 @@
-<template>
-  <div class="portal">
-    <!-- ================= 顶部通栏全局导航栏 ================= -->
-    <header class="nav-bar">
-      <div class="nav-inner">
-        <div class="nav-logo" @click="router.push('/dashboard')">
-          <el-icon :size="24" color="#fff"><DataAnalysis /></el-icon>
-          <span class="nav-logo-text">Data-Khaos-Platform</span>
-        </div>
-
-        <nav class="nav-menu">
-          <div class="nav-item" @click="router.push('/dashboard')" :class="{ active: route.path === '/dashboard' }">
-            首页
-          </div>
-
-          <!-- 门户地图：悬浮下拉弹窗 -->
-          <div
-            class="nav-item nav-map"
-            :class="{ active: mapOpen }"
-            @mouseenter="mapOpen = true"
-            @mouseleave="mapOpen = false"
-          >
-            门户地图
-            <el-icon class="nav-arrow"><ArrowDown /></el-icon>
-            <transition name="map-fade">
-              <div v-show="mapOpen" class="map-panel">
-                <div
-                  v-for="module in categories"
-                  :key="module.key"
-                  class="map-module"
-                  @mouseenter="hoverModule = module.key"
-                >
-                  <div class="map-module-head">
-                    <el-icon :size="18" color="#165dff"><component :is="module.icon" /></el-icon>
-                    <span>{{ module.title }}</span>
-                  </div>
-                  <div class="map-module-body">
-                    <template v-for="feat in module.features" :key="feat.key">
-                      <span
-                        v-if="feat.path"
-                        class="map-feature"
-                        @click="go(feat.path)"
-                      >
-                        {{ feat.title }}
-                      </span>
-                      <span v-else class="map-feature todo" @click="showTodo(feat.title)">
-                        {{ feat.title }}（待建设）
-                      </span>
-                    </template>
-                  </div>
-                </div>
-              </div>
-            </transition>
-          </div>
-
-          <!-- 六大分类模块导航（按可插拔配置渲染） -->
-          <template v-for="mod in categories" :key="mod.key">
-            <div
-              class="nav-item"
-              :class="{ active: activeModule === mod.key }"
-              @mouseenter="activeModule = mod.key"
-              @mouseleave="activeModule = ''"
-              @click="goModule(mod)"
-            >
-              {{ mod.title }}
-              <el-icon class="nav-arrow"><ArrowDown /></el-icon>
-              <transition name="map-fade">
-                <div v-show="activeModule === mod.key" class="map-panel mod-panel">
-                  <div class="map-module">
-                    <div class="map-module-head">
-                      <el-icon :size="18" color="#165dff"><component :is="mod.icon" /></el-icon>
-                      <span>{{ mod.title }}</span>
-                    </div>
-                    <div class="map-module-body">
-                      <template v-for="feat in mod.features" :key="feat.key">
-                        <span v-if="feat.path" class="map-feature" @click.stop="go(feat.path)">{{ feat.title }}</span>
-                        <span v-else class="map-feature todo" @click.stop="showTodo(feat.title)">{{ feat.title }}（待建设）</span>
-                      </template>
-                    </div>
-                  </div>
-                </div>
-              </transition>
-            </div>
-          </template>
-        </nav>
-
-        <div class="nav-right">
-          <div class="nav-item nav-extra" @mouseenter="extraOpen = true" @mouseleave="extraOpen = false">
-            系统管理
-            <el-icon class="nav-arrow"><ArrowDown /></el-icon>
-            <transition name="map-fade">
-              <div v-show="extraOpen" class="map-panel extra-panel">
-                <div class="map-module">
-                  <div class="map-module-body">
-                    <template v-for="feat in systemCategory.features" :key="feat.key">
-                      <span v-if="feat.path" class="map-feature" @click="go(feat.path)">{{ feat.title }}</span>
-                    </template>
-                    <span v-if="canConfig" class="map-feature accent" @click="go('/system/module-config')">门户模块配置</span>
-                  </div>
-                </div>
-              </div>
-            </transition>
-          </div>
-
-          <el-dropdown @command="handleCommand">
-            <span class="user-info">
-              <el-avatar :size="30" class="avatar">
-                <el-icon><UserFilled /></el-icon>
-              </el-avatar>
-              <span class="username">{{ userStore.userInfo?.realName || userStore.userInfo?.username || '未登录' }}</span>
-              <el-icon><ArrowDown /></el-icon>
-            </span>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item v-if="canConfig" command="moduleConfig">门户模块配置</el-dropdown-item>
-                <el-dropdown-item command="logout">退出登录</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
-      </div>
-    </header>
-
-    <!-- ================= 内容区 ================= -->
-    <main class="portal-content">
-      <router-view />
-    </main>
-  </div>
-</template>
-
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { useUserStore } from '@/stores/user'
-import { useModuleStore } from '@/stores/module'
+import { computed, ref, watch } from 'vue'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
+import { ArrowDown, Fold, Expand, Menu, Grid } from '@element-plus/icons-vue'
+import { buildWorkspaces, findWorkspace } from '@/modules/workspaces'
 import { getUserPermission } from '@/api/permission'
-import type { CategoryDef } from '@/modules/registry'
+import { useModuleStore } from '@/stores/module'
+import { useUserStore } from '@/stores/user'
+import ProductDirectory from './ProductDirectory.vue'
 
 const route = useRoute()
 const router = useRouter()
-const userStore = useUserStore()
-const moduleStore = useModuleStore()
+const user = useUserStore()
+const modules = useModuleStore()
+const menuOpen = ref(false)
+const sidebarCollapsed = ref(false)
+const foldedSections = ref(new Set<string>())
+const directoryOpen = ref(false)
 
-/** 六大分类模块（注册表 + 后端可插拔配置合并后的可见模块） */
-const categories = moduleStore.categories
-/** 系统管理分类 */
-const systemCategory = moduleStore.systemCategory
-/** 当前用户是否可配置门户模块 */
-const canConfig = moduleStore.canConfig
+const workspaces = computed(() => buildWorkspaces(
+  modules.loaded ? modules.categories : [],
+  modules.loaded ? modules.systemCategory : { key: 'system', title: '系统管理', icon: 'Setting', features: [] },
+  modules.canConfig,
+))
+const workspace = computed(() => findWorkspace(workspaces.value, route.path))
+const portalHome = computed(() => route.name === 'Dashboard')
+const sidebarLabel = computed(() => sidebarCollapsed.value ? '展开侧栏' : '收起侧栏')
 
-const mapOpen = ref(false)
-const extraOpen = ref(false)
-const hoverModule = ref('')
-const activeModule = ref('')
-
-function go(path: string) {
-  mapOpen.value = false
-  extraOpen.value = false
-  activeModule.value = ''
-  router.push(path)
+function isFolded(title: string) {
+  return foldedSections.value.has(`${workspace.value.key}:${title}`)
 }
 
-function goModule(mod: CategoryDef) {
-  const first = mod.features.find((f) => f.path)
-  if (first?.path) {
-    go(first.path)
-  } else {
-    showTodo(mod.title)
+function toggleSection(title: string) {
+  const key = `${workspace.value.key}:${title}`
+  if (foldedSections.value.has(key)) foldedSections.value.delete(key)
+  else foldedSections.value.add(key)
+}
+
+function isActive(path: string, match?: string) {
+  if (path.includes('?') || route.path === '/metadata/lineage') {
+    const target = router.resolve(path)
+    return target.path === route.path && target.query.mode === route.query.mode
   }
+  return path === route.path || Boolean(match && route.path.startsWith(match))
 }
 
-function showTodo(name: string) {
-  ElMessage.info(`「${name}」功能正在建设中，敬请期待`)
-}
-
-async function handleCommand(command: string) {
-  if (command === 'logout') {
-    await ElMessageBox.confirm('确认退出登录吗？', '提示', { type: 'warning' })
-    await userStore.logout()
-    router.push('/login')
-  } else if (command === 'moduleConfig') {
-    router.push('/system/module-config')
-  }
-}
-
-onMounted(async () => {
-  // 拉取用户能力位（用于判定 module:config 管理员权限），并加载可插拔模块配置
-  let capabilityFlags: string[] | undefined
+watch(() => route.fullPath, () => {
+  menuOpen.value = false
+  directoryOpen.value = false
+})
+watch(() => user.userInfo?.id, async id => {
+  modules.canConfig = false
   try {
-    const userId = userStore.userInfo?.id
-    if (userId) {
-      const perm = await getUserPermission(userId)
-      capabilityFlags = perm?.capabilityFlags
+    await modules.loadConfig()
+  } catch {
+    // The shared request handler reports the error. The core links remain usable.
+  }
+  if (!id) return
+  try {
+    const permission = await getUserPermission(id)
+    if (user.userInfo?.id === id) {
+      modules.canConfig = permission?.capabilityFlags?.includes('module:config') ?? false
     }
   } catch {
-    // 权限接口异常不阻塞门户渲染
+    // Keep privileged actions unavailable if capability lookup fails.
   }
-  await moduleStore.loadConfig(capabilityFlags)
-})
+}, { immediate: true })
+
+async function logout() {
+  await user.logout()
+  await router.replace('/login')
+}
 </script>
 
+<template>
+  <div class="dk-paas shell" :class="{ 'sidebar-collapsed': sidebarCollapsed || portalHome }">
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <aside v-if="!portalHome" id="platform-navigation" class="sidebar" :class="{ 'is-open': menuOpen }">
+      <nav :aria-label="`${workspace.title}菜单`">
+        <section v-for="(section, index) in workspace.sections" :key="`${workspace.key}:${section.title}`" class="nav-group">
+          <h2>
+            <button type="button" class="section-trigger" :aria-expanded="!isFolded(section.title)"
+              :aria-controls="`workspace-menu-${index}`" @click="toggleSection(section.title)">
+              <span>{{ section.title }}</span><ArrowDown aria-hidden="true" />
+            </button>
+          </h2>
+          <div :id="`workspace-menu-${index}`" v-show="!isFolded(section.title)">
+            <RouterLink v-for="link in section.links" :key="link.path" :to="link.path"
+              :class="{ current: isActive(link.path, link.match) }" @click="menuOpen = false">
+              <component :is="link.icon" class="nav-icon" aria-hidden="true" />{{ link.title }}
+            </RouterLink>
+          </div>
+        </section>
+      </nav>
+      <footer>© 2026 dkailab</footer>
+    </aside>
+    <header class="topbar">
+      <div class="context">
+        <button type="button" class="portal-trigger" :aria-expanded="directoryOpen"
+          aria-haspopup="dialog" @click="directoryOpen = true">
+          <span class="brand-icon"><Grid aria-hidden="true" /></span>
+          <span>产品服务</span><ArrowDown class="portal-chevron" aria-hidden="true" />
+        </button>
+        <RouterLink to="/dashboard" class="portal-brand">Data Khaos</RouterLink>
+        <button v-if="!portalHome" class="sidebar-toggle" type="button" :aria-label="sidebarLabel" :title="sidebarLabel"
+          aria-controls="platform-navigation" :aria-expanded="!sidebarCollapsed" @click="sidebarCollapsed = !sidebarCollapsed">
+          <component :is="sidebarCollapsed ? Expand : Fold" aria-hidden="true" />
+        </button>
+        <button v-if="!portalHome" class="menu-toggle" type="button" aria-label="切换平台导航" aria-controls="platform-navigation"
+          :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><Menu aria-hidden="true" /></button>
+        <strong v-if="!portalHome" class="page-context">{{ workspace.title }}</strong>
+      </div>
+      <el-dropdown trigger="click" @command="logout">
+        <button type="button" class="account">{{ user.userInfo?.realName || user.userInfo?.username || '账户' }}</button>
+        <template #dropdown>
+          <el-dropdown-menu><el-dropdown-item command="logout">退出登录</el-dropdown-item></el-dropdown-menu>
+        </template>
+      </el-dropdown>
+    </header>
+    <ProductDirectory v-model="directoryOpen" :workspaces="workspaces" :current="workspace.key" />
+    <div class="workspace">
+      <main id="main-content" class="workspace-content" :class="{ workbench: route.path === '/query/onesql' || portalHome }" tabindex="-1"><RouterView /></main>
+    </div>
+  </div>
+</template>
+
 <style scoped>
-.portal {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  background: var(--datakhaos-bg);
-}
-
-/* ============ 顶部通栏导航栏 ============ */
-.nav-bar {
-  flex-shrink: 0;
-  height: 60px;
-  background: linear-gradient(120deg, #7fb8e6 0%, #165dff 100%);
-  box-shadow: 0 2px 12px rgba(22, 93, 255, 0.18);
-  position: relative;
-  z-index: 100;
-}
-.nav-inner {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  padding: 0 20px;
-  gap: 24px;
-}
-.nav-logo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.nav-logo-text {
-  font-size: 20px;
-  font-weight: 700;
-  color: #fff;
-  letter-spacing: 0.02em;
-}
-.nav-menu {
-  flex: 1;
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-  height: 100%;
-}
-.nav-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 16px;
-  height: 100%;
-  color: rgba(255, 255, 255, 0.92);
-  font-size: 15px;
-  cursor: pointer;
-  border-radius: 8px;
-  transition: background 0.2s;
-  white-space: nowrap;
-}
-.nav-item:hover,
-.nav-item.active {
-  background: rgba(255, 255, 255, 0.18);
-  color: #fff;
-}
-.nav-arrow {
-  font-size: 12px;
-}
-.nav-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  height: 100%;
-}
-.nav-extra {
-  padding: 0 12px;
-}
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  color: #fff;
-  outline: none;
-  padding: 0 8px;
-}
-.avatar {
-  background: rgba(255, 255, 255, 0.25);
-}
-.username {
-  font-size: 14px;
-  color: #fff;
-}
-
-/* ============ 门户地图悬浮下拉弹窗 ============ */
-.map-panel {
-  position: absolute;
-  top: calc(100% + 10px);
-  left: 0;
-  min-width: 420px;
-  background: rgba(255, 255, 255, 0.96);
-  backdrop-filter: blur(8px);
-  border: 1px solid #d3e6f7;
-  border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(22, 93, 255, 0.12);
-  padding: 16px;
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
-}
-.mod-panel {
-  grid-template-columns: 1fr;
-  min-width: 260px;
-}
-.extra-panel {
-  grid-template-columns: 1fr;
-  min-width: 200px;
-}
-.map-module-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 15px;
-  font-weight: 700;
-  color: #1d2129;
-  margin-bottom: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #eaf3fb;
-}
-.map-module-body {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.map-feature {
-  display: inline-block;
-  padding: 5px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  color: #4e5969;
-  background: #f2f8fd;
-  border: 1px solid #eaf3fb;
-  cursor: pointer;
-  transition: all 0.18s;
-}
-.map-feature:hover {
-  background: linear-gradient(120deg, #7fb8e6, #165dff);
-  color: #fff;
-  border-color: transparent;
-}
-.map-feature.accent {
-  background: linear-gradient(120deg, #7fb8e6, #165dff);
-  color: #fff;
-  border-color: transparent;
-}
-.map-feature.todo {
-  color: #a9aeb8;
-  background: #f7f8fa;
-  cursor: not-allowed;
-}
-.map-feature.todo:hover {
-  background: #f7f8fa;
-  color: #a9aeb8;
-  transform: none;
-}
-
-.map-fade-enter-active,
-.map-fade-leave-active {
-  transition: opacity 0.18s, transform 0.18s;
-}
-.map-fade-enter-from,
-.map-fade-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
-}
-
-/* ============ 内容区 ============ */
-.portal-content {
-  flex: 1;
-  overflow: auto;
-  padding: 16px;
+.shell { display: grid; grid-template-columns: 214px minmax(0, 1fr); grid-template-rows: 57px 1fr; min-height: 100dvh; background: var(--dk-canvas); }
+.shell.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+.sidebar-collapsed .sidebar { display: none; }
+.workspace { grid-column: 2; grid-row: 2; min-width: 0; }
+.sidebar { grid-row: 2; grid-column: 1; position: sticky; top: 57px; display: flex; flex-direction: column; height: calc(100dvh - 57px); box-sizing: border-box; gap: 18px; border-right: 1px solid var(--dk-border); background: var(--dk-sidebar); padding: 18px 14px 10px; }
+.sidebar nav { overflow: auto; min-height: 0; padding: 3px; }
+.brand-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--dk-radius-control); background: var(--dk-primary); color: white; }
+.brand-icon svg { width: 18px; height: 18px; }
+.portal-trigger { display: flex; gap: 8px; align-items: center; white-space: nowrap; padding: 3px 7px 3px 3px; border: 1px solid transparent; border-radius: var(--dk-radius-control); background: transparent; color: var(--dk-ink); cursor: pointer; font: inherit; font-weight: 650; }
+.portal-trigger:hover, .portal-trigger[aria-expanded="true"] { background: var(--dk-primary-soft); color: var(--dk-primary); }
+.portal-chevron { width: 14px; height: 14px; }
+.nav-icon { width: 16px; height: 16px; flex: none; }
+.portal-brand { margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--dk-border); color: var(--dk-ink); text-decoration: none; font-size: 17px; font-weight: 700; white-space: nowrap; }
+.sidebar nav a { display: flex; gap: 8px; align-items: center; min-height: 32px; box-sizing: border-box; padding: 5px 8px; border-radius: var(--dk-radius-control); text-decoration: none; color: var(--dk-sidebar-text); font-size: 13px; }
+.sidebar nav a:hover, .sidebar nav a.current { color: var(--dk-primary); background: var(--dk-sidebar-selected); }
+.sidebar-toggle svg, .menu-toggle svg { width: 16px; height: 16px; }
+.nav-group + .nav-group { margin-top: 12px; }
+.nav-group h2 { margin: 0; }
+.section-trigger { display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: pointer; width: 100%; padding: 5px 8px; border: 0; background: transparent; color: var(--dk-muted); font: 650 12px/1.5 var(--dk-font); }
+.section-trigger svg { width: 12px; height: 12px; }
+.section-trigger[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.sidebar footer { color: var(--dk-muted); border-top: 1px solid var(--dk-border); padding: 10px 5px 0; margin-top: auto; font-size: 11px; }
+.topbar { grid-column: 1 / -1; grid-row: 1; position: sticky; top: 0; z-index: 11; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding-inline: clamp(10px, 2vw, 24px); border-bottom: 1px solid var(--dk-border); background: var(--dk-surface); }
+.context { display: flex; align-items: center; gap: 9px; }
+.page-context { margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--dk-border); font-weight: 550; color: var(--dk-muted); }
+.account, .menu-toggle, .sidebar-toggle { font: inherit; background: var(--dk-surface); color: var(--dk-ink); border: 1px solid var(--dk-border); border-radius: var(--dk-radius-control); padding: 5px 10px; cursor: pointer; }
+.menu-toggle { display: none; }
+.sidebar-toggle { display: inline-grid; place-items: center; }
+.workspace-content { margin: auto; padding: clamp(12px, 2.5vw, 28px); min-width: 0; }
+.workspace-content.workbench { padding: 0; }
+.skip-link { position: fixed; top: 8px; left: 8px; z-index: 30; padding: 8px; background: white; transform: translateY(-150%); }
+.skip-link:focus { transform: none; }
+@media (max-width: 760px) {
+  .shell { display: block; }
+  .topbar { position: sticky; top: 0; z-index: 11; }
+  .sidebar { display: none; }
+  .sidebar.is-open, .sidebar-collapsed .sidebar.is-open { display: flex; position: fixed; top: 57px; bottom: 0; height: auto; width: min(214px, 84vw); z-index: 10; box-shadow: 4px 3px 20px #1f353528; }
+  .sidebar-toggle { display: none; }
+  .menu-toggle { display: inline-grid; place-items: center; }
+  .page-context { display: none; }
+  .portal-brand { font-size: 14px; padding-left: 7px; margin-left: 0; }
+  .context { gap: 6px; }
 }
 </style>

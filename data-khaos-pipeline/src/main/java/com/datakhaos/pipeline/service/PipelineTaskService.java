@@ -4,8 +4,8 @@ import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.datakhaos.common.exception.BusinessException;
-import com.datakhaos.common.model.PageResult;
 import com.datakhaos.common.security.MetadataHolder;
+import com.datakhaos.common.model.PageResult;
 import com.datakhaos.permission.api.service.PermissionConstants;
 import com.datakhaos.pipeline.engine.EngineFactory;
 import com.datakhaos.pipeline.entity.PipelineInstance;
@@ -101,14 +101,40 @@ public class PipelineTaskService {
 
     /** 手动触发运行 */
     public PipelineInstance run(String taskId) {
+        return run(taskId, "MANUAL", null, null);
+    }
+
+    /**
+     * 触发运行（供工作流/调度内部调用）。
+     * 内部系统身份跳过项目组成员校验，但仍校验任务启用状态。
+     *
+     * @param triggerType        MANUAL/CRON/SCHEDULE/WORKFLOW
+     * @param workflowRunId     关联工作流运行ID（可空）
+     * @param workflowNodeRunId 关联工作流节点运行ID（可空）
+     */
+    public PipelineInstance run(String taskId, String triggerType,
+                                String workflowRunId, String workflowNodeRunId) {
         PipelineTask task = get(taskId);
-        PipelineAuthContext.AuthContext ctx = auth.current();
-        auth.requireCap(ctx, PermissionConstants.CAP_PIPELINE_RUN);
-        auth.checkGroup(ctx, task.getProjectGroupId(), "同步任务");
-        if (task.getStatus() == null || task.getStatus() != 1) {
-            throw new BusinessException("任务已停用，请先启用");
+        boolean manual = "MANUAL".equals(triggerType);
+        if (!manual || StrUtil.isNotBlank(workflowRunId) || StrUtil.isNotBlank(workflowNodeRunId)) {
+            if (!MetadataHolder.isSystemCaller()) {
+                throw new BusinessException("内部管道触发需要系统身份");
+            }
         }
-        PipelineInstance instance = runner.createInstance(task, "MANUAL");
+        if (!manual) {
+            // 内部触发：校验任务启用，不校验项目组成员
+            if (task.getStatus() == null || task.getStatus() != 1) {
+                throw new BusinessException("任务已停用，请先启用: " + taskId);
+            }
+        } else {
+            PipelineAuthContext.AuthContext ctx = auth.current();
+            auth.requireCap(ctx, PermissionConstants.CAP_PIPELINE_RUN);
+            auth.checkGroup(ctx, task.getProjectGroupId(), "同步任务");
+            if (task.getStatus() == null || task.getStatus() != 1) {
+                throw new BusinessException("任务已停用，请先启用");
+            }
+        }
+        PipelineInstance instance = runner.createInstance(task, triggerType, workflowRunId, workflowNodeRunId);
         executor.execute(() -> runner.execute(task, instance));
         return instance;
     }

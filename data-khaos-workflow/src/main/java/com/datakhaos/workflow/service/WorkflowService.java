@@ -169,6 +169,15 @@ public class WorkflowService {
         return page.getRecords();
     }
 
+    public WorkflowRun latestRunByScheduleLog(String workflowId, String scheduleLogId) {
+        return runMapper.selectList(new LambdaQueryWrapper<WorkflowRun>()
+                        .eq(WorkflowRun::getWfId, workflowId)
+                        .eq(WorkflowRun::getScheduleLogId, scheduleLogId)
+                        .orderByDesc(WorkflowRun::getCreateTime)
+                        .orderByDesc(WorkflowRun::getId))
+                .stream().findFirst().orElse(null);
+    }
+
     public WorkflowRun runDetail(String runId) {
         return runMapper.selectById(runId);
     }
@@ -186,6 +195,14 @@ public class WorkflowService {
 
     /** 触发工作流运行（runner 内部异步执行） */
     public String trigger(String wfId, Map<String, Object> params, String triggerType) {
+        return trigger(wfId, params, triggerType, null, null);
+    }
+
+    /**
+     * 触发工作流运行（携带调度关联ID，供追溯）。
+     */
+    public String trigger(String wfId, Map<String, Object> params, String triggerType,
+                          String scheduleJobId, String scheduleLogId) {
         WorkflowDef def = defMapper.selectById(wfId);
         if (def == null) {
             throw new BusinessException(ResultCode.NOT_FOUND, "工作流不存在: " + wfId);
@@ -195,7 +212,7 @@ public class WorkflowService {
         }
         // 参数模板(def.params) 作为默认值，运行时参数优先覆盖
         Map<String, Object> effective = mergeParams(def.getParams(), params);
-        return workflowRunner.trigger(wfId, triggerType, effective, def.getName());
+        return workflowRunner.trigger(wfId, triggerType, effective, def.getName(), scheduleJobId, scheduleLogId);
     }
 
     /** 合并参数：def.params 模板为默认，runtimeParams 覆盖之 */

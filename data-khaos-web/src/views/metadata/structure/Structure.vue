@@ -124,6 +124,7 @@ interface TreeNode {
 }
 
 const loading = ref(false)
+let structureRequest = 0
 const datasources = ref<any[]>([])
 const selectedDsId = ref('')
 const treeData = ref<TreeNode[]>([])
@@ -157,9 +158,13 @@ async function loadDatasources() {
 
 async function loadStructure() {
   if (!selectedDsId.value) return
+  const request = ++structureRequest
+  const datasource = selectedDsId.value
   loading.value = true
+  treeData.value = []
   try {
-    const data = await getStructure(selectedDsId.value)
+    const data = await getStructure(datasource)
+    if (request !== structureRequest) return
     treeData.value = (data || []).map((dbNode: StructDb) => ({
       id: `db-${dbNode.database.id}`,
       label: dbNode.database.databaseName ?? dbNode.database.id ?? '',
@@ -181,8 +186,10 @@ async function loadStructure() {
         })),
       })),
     }))
+  } catch {
+    // The shared request handler reports load errors.
   } finally {
-    loading.value = false
+    if (request === structureRequest) loading.value = false
   }
 }
 
