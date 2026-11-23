@@ -14,6 +14,18 @@
     <name>data-khaos-pipeline</name>
     <description>数据管道服务（管理面）：任务/实例/worker 管理 + 引擎 SPI 编排（SeaTunnel/DataX 可扩展，DB-Sync 兜底）</description>
 
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>5.10.5</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -28,6 +40,11 @@
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.dameng</groupId>
+            <artifactId>DmJdbcDriver18</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
@@ -35,6 +52,10 @@
         <dependency>
             <groupId>com.alibaba.cloud</groupId>
             <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-loadbalancer</artifactId>
         </dependency>
         <dependency>
             <groupId>com.github.xiaoymin</groupId>
@@ -48,6 +69,14 @@
         <dependency>
             <groupId>com.datakhaos</groupId>
             <artifactId>data-khaos-permission-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.datakhaos</groupId>
+            <artifactId>data-khaos-pipeline-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.datakhaos</groupId>
+            <artifactId>data-khaos-datasource-api</artifactId>
         </dependency>
         <!-- Hive JDBC 驱动：DB-Sync 引擎直连 HiveServer2。
              精简依赖避免 fat jar 过大触发 Spring Boot 嵌套 jar 加载器 NegativeArraySizeException：
@@ -257,10 +286,30 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

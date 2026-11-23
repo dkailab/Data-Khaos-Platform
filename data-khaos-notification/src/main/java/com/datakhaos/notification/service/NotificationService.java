@@ -100,6 +100,19 @@ public class NotificationService {
         return record;
     }
 
+    /** 站内通知与调用方的业务记录在同一事务提交。 */
+    public void recordSiteMessage(String receiverId, String title, String content) {
+        NotifyRecord record = new NotifyRecord();
+        record.setReceiverId(receiverId);
+        record.setReceiverType("USER");
+        record.setChannel("SITE");
+        record.setTitle(title);
+        record.setContent(content);
+        record.setStatus(1);
+        record.setSendTime(LocalDateTime.now());
+        recordMapper.insert(record);
+    }
+
     /** 按渠道投递并更新记录状态 */
     private void deliver(NotifyRecord record) {
         try {

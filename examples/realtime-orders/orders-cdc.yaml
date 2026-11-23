@@ -1,0 +1,22 @@
+source:
+  type: mysql
+  hostname: mysql
+  port: 3306
+  username: cdc_reader
+  password: local-orders-cdc
+  tables: orders_source.orders
+  server-id: 7110-7114
+  server-time-zone: UTC
+  scan.startup.mode: initial
+  jdbc.properties.allowPublicKeyRetrieval: "true"
+
+sink:
+  type: kafka
+  properties.bootstrap.servers: kafka:9092
+  topic: orders.ods.v1
+  key.format: json
+  value.format: debezium-json
+
+pipeline:
+  name: Orders MySQL CDC
+  parallelism: 1

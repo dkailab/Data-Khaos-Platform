@@ -3,14 +3,18 @@ package com.datakhaos.query.controller;
 import com.datakhaos.common.model.R;
 import com.datakhaos.datasource.api.model.ColumnInfo;
 import com.datakhaos.datasource.api.model.QueryResult;
+import com.datakhaos.query.dto.MaterializationPreview;
 import com.datakhaos.query.dto.SqlCompleteRequest;
 import com.datakhaos.query.dto.SqlCompleteResult;
 import com.datakhaos.query.dto.SqlDiagnoseResult;
 import com.datakhaos.query.dto.SqlParseResult;
+import com.datakhaos.query.service.MaterializationQueryService;
 import com.datakhaos.query.service.OnesqlService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -27,6 +31,15 @@ import java.util.Map;
 public class OnesqlController {
 
     private final OnesqlService onesqlService;
+    private final MaterializationQueryService materializations;
+
+    @GetMapping("/materializations/{assetId}/preview")
+    public R<MaterializationPreview> materializedPreview(@PathVariable String assetId, @RequestParam String bizDate,
+                                                         @RequestParam(defaultValue = "false") boolean refresh,
+                                                         HttpServletResponse response) {
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+        return R.ok(materializations.preview(assetId, bizDate, refresh));
+    }
 
     @Operation(summary = "SQL 补全建议")
     @PostMapping("/complete")

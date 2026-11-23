@@ -56,6 +56,19 @@
             <groupId>com.datakhaos</groupId>
             <artifactId>data-khaos-permission-api</artifactId>
         </dependency>
+        <!-- PR3 运行证据：聚合工作流运行 / 管道实例 / 质量快照 -->
+        <dependency>
+            <groupId>com.datakhaos</groupId>
+            <artifactId>data-khaos-workflow-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.datakhaos</groupId>
+            <artifactId>data-khaos-pipeline-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.datakhaos</groupId>
+            <artifactId>data-khaos-dquality-api</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

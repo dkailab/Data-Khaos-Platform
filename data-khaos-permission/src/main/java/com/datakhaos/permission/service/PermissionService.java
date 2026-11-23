@@ -37,6 +37,16 @@ public class PermissionService {
     private final com.datakhaos.permission.mapper.SysOrgPermissionMapper orgPermissionMapper;
     private final ProjectGroupService projectGroupService;
 
+    public boolean isPlatformAdministrator(String userId) {
+        if (DEFAULT_ADMIN_ID.equals(userId)) {
+            return true;
+        }
+        List<String> roleIds = userRoleMapper.selectList(new LambdaQueryWrapper<SysUserRole>()
+                        .eq(SysUserRole::getUserId, userId)).stream().map(SysUserRole::getRoleId).toList();
+        return !roleIds.isEmpty() && roleMapper.selectCount(new LambdaQueryWrapper<SysRole>()
+                .in(SysRole::getId, roleIds).eq(SysRole::getRoleCode, SUPER_ADMIN).eq(SysRole::getStatus, 1)) > 0;
+    }
+
     /**
      * 计算用户权限视图（角色 / 权限标识 / 可见菜单）
      */
@@ -68,7 +78,7 @@ public class PermissionService {
                     .filter(com.datakhaos.permission.api.model.ProjectGroupDto::getPrimary).findFirst()
                     .orElse(groups.get(0));
             dto.setProjectGroupId(current.getId());
-            List<String> capabilityFlags = projectGroupService.getCapabilityFlags(userId, current.getId());
+            List<String> capabilityFlags = new java.util.ArrayList<>(current.getCapabilityFlags());
             dto.setCapabilityFlags(capabilityFlags);
             // 能力位并入权限标识集合，供前端显隐菜单/按钮
             for (String flag : capabilityFlags) {

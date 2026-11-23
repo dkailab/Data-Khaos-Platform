@@ -53,4 +53,18 @@ public class PipelineInstanceController {
         }
         return R.ok(instanceService.byWorkflowNode(runId, nodeRunId));
     }
+
+    @Operation(summary = "按目标表反查实例（供数据地图回查分区发布记录）")
+    @GetMapping("/by-target")
+    public R<List<PipelineInstance>> byTarget(@RequestParam String datasourceId,
+                                              @RequestParam String databaseName,
+                                              @RequestParam String targetTable,
+                                              @RequestParam(required = false) String bizDate,
+                                              @RequestParam(defaultValue = "false") boolean published,
+                                              @RequestParam(defaultValue = "20") int limit) {
+        if (!MetadataHolder.isSystemCaller()) {
+            throw new com.datakhaos.common.exception.BusinessException("按目标表反查实例需要系统身份");
+        }
+        return R.ok(instanceService.byTargetTable(datasourceId, databaseName, targetTable, bizDate, published, limit));
+    }
 }

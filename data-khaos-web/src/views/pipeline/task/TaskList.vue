@@ -72,12 +72,13 @@
         </template>
       </el-table-column>
       <el-table-column prop="updateTime" label="更新时间" width="170" />
-      <el-table-column label="操作" width="400" fixed="right">
+      <el-table-column label="操作" width="430" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" :disabled="!row.sourceDsId || !row.sourceTable" @click="openProbeRow(row, 'source')">探数</el-button>
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button v-if="row.status !== 1" link type="success" @click="handleEnable(row)">启用</el-button>
           <el-button v-else link type="warning" @click="handleDisable(row)">停用</el-button>
+          <el-button v-if="canPreflight(row)" link type="primary" @click="preflightTask = row">预检</el-button>
           <el-button link type="info" @click="handleRun(row)">运行</el-button>
           <el-button link type="primary" @click="openInstances(row)">实例</el-button>
           <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
@@ -217,11 +218,26 @@
           <el-form-item label="字段映射">
             <el-input v-model="wizardForm.fieldMapping" type="textarea" :rows="2" placeholder='JSON，如 {"col_a":"col_b"}（可选）' />
           </el-form-item>
+          <template v-if="wizardForm.engine === 'DB_SYNC' && targetType !== 'HIVE'">
+            <el-form-item label="写入策略">
+              <el-radio-group v-model="wizardForm.writeMode">
+                <el-radio value="APPEND">追加</el-radio>
+                <el-radio value="REPLACE_BY_BIZ_DATE">按业务日覆盖</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item v-if="wizardForm.writeMode === 'REPLACE_BY_BIZ_DATE'" label="目标日期列" required>
+              <el-input v-model="wizardForm.dateColumn" placeholder="例如 stat_date" />
+              <div v-if="sourceType === 'HIVE'" class="tip">自定义源查询用 ${bizDate} 过滤。源日期列同名时可省略 SQL，异名时可在引擎配置填 sourceDateColumn。</div>
+            </el-form-item>
+          </template>
           <el-form-item label="Cron 表达式">
             <el-input v-model="wizardForm.cronExpr" placeholder="如 0 0 2 * * ?（空=仅手动）" />
           </el-form-item>
           <el-form-item label="引擎配置">
-            <el-input v-model="wizardForm.config" type="textarea" :rows="2" placeholder='JSON，如 {"timeoutSeconds":3600}（可选）' />
+            <el-input v-model="wizardForm.config" type="textarea" :rows="2" placeholder='JSON，如 {"timeoutSeconds":600,"batchSize":500}（可选）' />
+            <div v-if="wizardForm.engine === 'DB_SYNC' && targetType === 'MYSQL' && wizardForm.writeMode === 'REPLACE_BY_BIZ_DATE'" class="tip">
+              目标库已部署物化版本表时，可配置 <code>"serveMaterialization": true</code>。
+            </div>
           </el-form-item>
           <el-form-item label="状态">
             <el-radio-group v-model="wizardForm.status">
@@ -244,6 +260,8 @@
       </template>
     </el-dialog>
 
+    <PipelinePreflightDialog v-if="preflightTask" :task="preflightTask" @close="preflightTask = undefined" />
+
     <!-- 执行实例对话框 -->
     <el-dialog v-model="instanceVisible" :title="`执行实例 - ${currentTask?.taskName || ''}`" width="920px">
       <el-table v-loading="instanceLoading" :data="instances" size="small" border max-height="420">
@@ -262,7 +280,8 @@
         <el-table-column prop="endTime" label="结束时间" width="170" />
         <el-table-column prop="durationMs" label="耗时(ms)" width="95" />
         <el-table-column prop="rows" label="行数" width="80" />
-        <el-table-column prop="errorMessage" label="失败原因" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="bizDate" label="业务日期" width="115" />
+        <el-table-column prop="errorMessage" label="异常说明" min-width="160" show-overflow-tooltip />
       </el-table>
     </el-dialog>
 
@@ -347,6 +366,7 @@ import {
   runPipelineTask,
   updatePipelineTask,
 } from '@/api/pipeline'
+import PipelinePreflightDialog from './PipelinePreflightDialog.vue'
 import { executeSql, listColumnInfos, pageDatasources, tableCount, testDatasourceById } from '@/api/datasource'
 import { listProjectGroups } from '@/api/permission'
 import type { ColumnInfo, MetaDatasource, PipelineEngineInfo, PipelineInstance, PipelineTask, ProjectGroupDto } from '@/types'
@@ -477,13 +497,23 @@ function engineDesc(t?: string) {
 }
 
 function instanceText(s?: number) {
-  return { 0: '运行中', 1: '成功', 2: '失败' }[s ?? -1] ?? '-'
+  return { 0: '运行中', 1: '成功', 2: '失败', 3: '提交待核查' }[s ?? -1] ?? '-'
 }
 
-function instanceTagType(s?: number): 'success' | 'danger' | 'info' {
+function instanceTagType(s?: number): 'success' | 'danger' | 'warning' | 'info' {
   if (s === 1) return 'success'
   if (s === 2) return 'danger'
+  if (s === 3) return 'warning'
   return 'info'
+}
+
+const preflightTask = ref<PipelineTask>()
+
+function canPreflight(task: PipelineTask) {
+  if (task.engine !== 'DB_SYNC') return false
+  const source = dsOptions.value.find(ds => ds.id === task.sourceDsId)
+  const target = dsOptions.value.find(ds => ds.id === task.targetDsId)
+  return source?.dsType === 'HIVE' && (target?.dsType === 'MYSQL' || target?.dsType === 'DM8')
 }
 
 function dsName(id?: string) {
@@ -542,14 +572,15 @@ function openCreate() {
   wizardStep.value = 0
   sourceType.value = 'MYSQL'
   targetType.value = 'MYSQL'
-  Object.assign(wizardForm, { taskName: '', taskType: 'SYNC', engine: 'DB_SYNC', sourceDsId: '', sourceTable: '', targetDsId: '', targetTable: '', sourceQuery: '', fieldMapping: '', config: '', cronExpr: '', status: 1, projectGroupId: filterGroupId.value || '' })
+  Object.assign(wizardForm, { taskName: '', taskType: 'SYNC', engine: 'DB_SYNC', sourceDsId: '', sourceTable: '', targetDsId: '', targetTable: '', sourceQuery: '', fieldMapping: '', writeMode: 'APPEND', dateColumn: '', config: '', cronExpr: '', status: 1, projectGroupId: filterGroupId.value || '' })
   wizardVisible.value = true
 }
 
 function openEdit(row: PipelineTask) {
   isEdit.value = true
   wizardStep.value = 0
-  Object.assign(wizardForm, { ...row })
+  Object.assign(wizardForm, { writeMode: 'APPEND', dateColumn: '', ...row })
+  wizardForm.writeMode ||= 'APPEND'
   const src = dsOptions.value.find((d) => d.id === row.sourceDsId)
   const tgt = dsOptions.value.find((d) => d.id === row.targetDsId)
   sourceType.value = src?.dsType || 'MYSQL'
@@ -572,6 +603,14 @@ function nextStep() {
 
 async function submit() {
   await formRef.value?.validate()
+  if (wizardForm.engine === 'DB_SYNC' && wizardForm.writeMode === 'REPLACE_BY_BIZ_DATE' && !wizardForm.dateColumn?.trim()) {
+    ElMessage.warning('请填写目标日期列')
+    return
+  }
+  if (wizardForm.engine === 'DB_SYNC' && targetType.value === 'DM8' && sourceType.value !== 'HIVE') {
+    ElMessage.warning('达梦目标的 DB-Sync 加载目前支持 Hive 源')
+    return
+  }
   submitting.value = true
   try {
     const payload = { ...wizardForm } as PipelineTask
@@ -608,9 +647,25 @@ async function handleDisable(row: PipelineTask) {
 }
 
 async function handleRun(row: PipelineTask) {
-  await ElMessageBox.confirm(`确认立即运行任务「${row.taskName}」吗？`, '提示', { type: 'warning' })
-  const instance = await runPipelineTask(row.id!)
-  ElMessage.success(`已触发运行，实例ID: ${instance.id}`)
+  try {
+    let date: string | undefined
+    if (row.writeMode === 'REPLACE_BY_BIZ_DATE' || row.sourceQuery?.includes('${bizDate}')) {
+      const result = await ElMessageBox.prompt(`请输入任务「${row.taskName}」的业务日期`, '按业务日加载', {
+        inputType: 'date',
+        inputPattern: /^\d{4}-\d{2}-\d{2}$/,
+        inputErrorMessage: '请选择业务日期',
+        confirmButtonText: '提交运行',
+      })
+      date = (result as unknown as { value?: string }).value
+      if (!date) return
+    } else {
+      await ElMessageBox.confirm(`确认立即运行任务「${row.taskName}」吗？`, '运行任务', { type: 'warning' })
+    }
+    const instance = await runPipelineTask(row.id!, date)
+    ElMessage.success(`已触发运行，实例 ID ${instance.id}`)
+  } catch {
+    // Cancellation needs no toast; the HTTP client reports submission errors.
+  }
 }
 
 async function openInstances(row: PipelineTask) {
@@ -652,6 +707,10 @@ async function startProbe(dsId: string, tableInput: string) {
     const idx = table.lastIndexOf('.')
     database = table.slice(0, idx)
     table = table.slice(idx + 1)
+  }
+  if (!database) {
+    ElMessage.warning('请在数据源配置模式，或使用 模式.表')
+    return
   }
   probeLabel.value = `${ds.dsName}.${database}.${table}`
   probeVisible.value = true

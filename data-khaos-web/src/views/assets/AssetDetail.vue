@@ -4,6 +4,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import { getAsset, pageAssetFields, type AssetDetail } from '@/api/metadata'
 import type { MetaColumn } from '@/types'
 import DkButton from '@/paas-ui/DkButton.vue'
+import AssetPublication from './AssetPublication.vue'
 import DkPageHeader from '@/paas-ui/DkPageHeader.vue'
 
 const route = useRoute()
@@ -26,7 +27,7 @@ watch([id, retry], async ([assetId], _, onCleanup) => {
   onCleanup(() => request.abort())
   detail.value = undefined
   page.value = 1
-  tab.value = 'fields'
+  tab.value = route.query.tab === 'publication' || route.query.runId ? 'publication' : 'fields'
   loading.value = true
   error.value = false
   try {
@@ -63,7 +64,7 @@ watch([detail, page, fieldRetry], async ([item, current], _, onCleanup) => {
 
 <template>
   <div class="asset-page">
-    <RouterLink class="dk-link" :to="{ name: 'AssetCatalog', query: route.query }">← 返回数据地图</RouterLink>
+    <RouterLink class="dk-link" :to="{ name: 'AssetCatalog', query: { q: route.query.q } }">← 返回数据地图</RouterLink>
     <DkPageHeader :title="detail?.table.tableName || '资产详情'"
       :description="detail ? `${detail.table.datasourceId} / ${detail.table.databaseName}` : undefined" />
     <section v-if="loading || error" v-loading="loading" class="dk-panel asset-panel" aria-live="polite">
@@ -93,13 +94,16 @@ watch([detail, page, fieldRetry], async ([item, current], _, onCleanup) => {
                 :total="fieldTotal" layout="total, prev, pager, next" />
             </template>
           </el-tab-pane>
+          <el-tab-pane label="发布记录" name="publication">
+            <AssetPublication v-if="tab === 'publication'" :asset-id="detail.table.id" />
+          </el-tab-pane>
           <el-tab-pane label="血缘" name="lineage">
             <div class="relations">
               <section v-for="direction in directions" :key="direction.title">
                 <h2>{{ direction.title }}</h2>
                 <ul>
                   <li v-for="(relation, index) in detail.relations.filter(link => link.upstream === direction.upstream)" :key="index">
-                    <RouterLink class="dk-link" :to="{ name: 'AssetDetail', params: { tableId: relation.table.id }, query: route.query }">
+                    <RouterLink class="dk-link" :to="{ name: 'AssetDetail', params: { tableId: relation.table.id }, query: { q: route.query.q } }">
                       {{ relation.table.databaseName }}.{{ relation.table.tableName }}
                     </RouterLink>
                     <small>{{ relation.table.datasourceId }} · {{ relation.type || '关联' }}</small>

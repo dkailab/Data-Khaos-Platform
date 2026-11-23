@@ -675,6 +675,33 @@ export interface QueryHistory {
   createTime?: string
 }
 
+export interface QueryUsageDay {
+  submittedOn: string
+  succeeded: number
+  failed: number
+  cancelled: number
+  active: number
+  timedSuccesses: number
+  executionSeconds: number
+}
+
+export type QueryJobStatus = 'QUEUED' | 'RUNNING' | 'CANCEL_REQUESTED' | 'SUCCESS' | 'FAILED' | 'CANCELLED'
+
+export interface QueryJob {
+  id: string
+  datasourceId: string
+  databaseName?: string
+  sqlText: string
+  status: QueryJobStatus
+  createTime: string
+  startTime?: string
+  endTime?: string
+  resultExpiresAt?: string
+  resultAvailable: boolean
+  rowCount?: number
+  errorMessage?: string
+}
+
 /* ==================== 可视化 ==================== */
 
 /** 数据集 */
@@ -1131,6 +1158,8 @@ export interface PipelineTask {
   sourceQuery?: string
   /** 字段映射（JSON，选填） */
   fieldMapping?: string
+  writeMode?: 'APPEND' | 'REPLACE_BY_BIZ_DATE'
+  dateColumn?: string
   /** 引擎扩展配置（JSON） */
   config?: string
   /** 定时表达式（空=仅手动） */
@@ -1156,12 +1185,15 @@ export interface PipelineInstance {
   engine?: string
   /** MANUAL / CRON */
   triggerType?: string
-  /** 0=运行中 1=成功 2=失败 */
+  /** 0=运行中 1=成功 2=失败 3=提交待核查 */
   status?: number
   startTime?: string
   endTime?: string
   durationMs?: number
   rows?: number
+  bizDate?: string
+  targetDatabaseName?: string
+  targetTable?: string
   errorMessage?: string
   worker?: string
 }
@@ -1204,6 +1236,16 @@ export interface ModuleDisplayConfig {
 /* ==================== 工作流编排 ==================== */
 
 /** 工作流定义 */
+export interface WorkflowRevision {
+  id: string
+  revisionNumber: number
+  note: string
+  createdBy: string
+  createTime: string
+  nodeCount: number
+  edgeCount: number
+}
+
 export interface WorkflowDef {
   id?: string
   name: string

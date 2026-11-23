@@ -27,8 +27,8 @@ export function deletePipelineTask(id: string) {
 }
 
 /** 手动触发运行 */
-export function runPipelineTask(id: string) {
-  return post<PipelineInstance>(`/pipeline/task/${id}/run`)
+export function runPipelineTask(id: string, bizDate?: string) {
+  return post<PipelineInstance>(`/pipeline/task/${encodeURIComponent(id)}/run`, undefined, { params: { bizDate } })
 }
 
 /** 引擎列表（可扩展） */
@@ -44,4 +44,24 @@ export function pagePipelineInstances(params: Record<string, any>) {
 /** 某任务的历史实例 */
 export function listPipelineInstanceByTask(taskId: string) {
   return get<PipelineInstance[]>(`/pipeline/instance/task/${taskId}`)
+}
+export interface PipelinePreflight {
+  targetDatabaseName: string
+  targetTable: string
+  bizDate?: string
+  writeMode: 'APPEND' | 'REPLACE_BY_BIZ_DATE'
+  batchSize: number
+  sampleFound: boolean
+  mappings: {
+    sourceColumn: string
+    sourceType: string
+    targetColumn: string
+    targetType: string
+    partitionColumn: boolean
+  }[]
+  warnings: string[]
+}
+
+export function preflightPipelineTask(id: string, bizDate?: string, signal?: AbortSignal) {
+  return post<PipelinePreflight>(`/pipeline/task/${encodeURIComponent(id)}/preflight`, { bizDate }, { signal })
 }

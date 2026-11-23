@@ -19,7 +19,11 @@
       <!-- 表格 -->
       <div v-else-if="chartType === 'TABLE'" class="table-wrap">
         <el-table :data="rows" border size="small" height="100%" max-height="100%" stripe>
-          <el-table-column v-for="c in columns" :key="c" :prop="c" :label="c" min-width="120" show-overflow-tooltip />
+          <el-table-column v-for="c in columns" :key="c" :prop="c" :label="c" min-width="120" show-overflow-tooltip>
+            <template v-if="$slots['table-cell']" #default="{ row }">
+              <slot name="table-cell" :row="row" :column="c" />
+            </template>
+          </el-table-column>
         </el-table>
       </div>
 

@@ -99,3 +99,40 @@ export function getAsset(id: string, signal?: AbortSignal) {
 export function pageAssetFields(id: string, current: number, signal?: AbortSignal) {
   return get<PageResult<MetaColumn>>(`/meta/assets/${encodeURIComponent(id)}/fields`, { current, size: 20 }, { signal })
 }
+
+export interface PublicationInstance {
+  id: string
+  bizDate?: string
+  status: number
+  workflowRunId?: string
+  publishedAt?: string
+  materializationGeneration?: string
+  errorMessage?: string
+}
+
+export interface AssetEvidence {
+  publishedInstance?: PublicationInstance
+  qualityPass?: { id: string; tableName: string }
+  recentInstances: PublicationInstance[]
+}
+
+export interface RunEvidence {
+  run: { id: string; wfName?: string; runStatus: string }
+  nodes: {
+    nodeRunId: string
+    nodeName: string
+    status: string
+    refId?: string
+    errorMessage?: string
+    inputAssets: string[]
+    outputAssets: string[]
+  }[]
+}
+
+export function getAssetEvidence(id: string, bizDate: string, signal: AbortSignal) {
+  return get<AssetEvidence>(`/meta/assets/${encodeURIComponent(id)}/evidence`, { bizDate: bizDate || undefined }, { signal })
+}
+
+export function getRunEvidence(id: string, signal: AbortSignal) {
+  return get<RunEvidence>(`/meta/run-evidence/${encodeURIComponent(id)}`, undefined, { signal })
+}

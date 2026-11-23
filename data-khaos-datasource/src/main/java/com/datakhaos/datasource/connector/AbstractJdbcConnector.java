@@ -74,7 +74,7 @@ public abstract class AbstractJdbcConnector implements DataSourceConnector {
         List<String> result = new ArrayList<>();
         try (Connection conn = open(config)) {
             DatabaseMetaData meta = conn.getMetaData();
-            try (ResultSet rs = meta.getTables(database, database, "%", new String[]{"TABLE", "VIEW"})) {
+            try (ResultSet rs = meta.getTables(metadataCatalog(database), database, "%", new String[]{"TABLE", "VIEW"})) {
                 while (rs.next()) {
                     result.add(rs.getString("TABLE_NAME"));
                 }
@@ -91,13 +91,13 @@ public abstract class AbstractJdbcConnector implements DataSourceConnector {
         try (Connection conn = open(config)) {
             DatabaseMetaData meta = conn.getMetaData();
             Map<String, String> pks = new HashMap<>();
-            try (ResultSet rs = meta.getPrimaryKeys(database, database, table)) {
+            try (ResultSet rs = meta.getPrimaryKeys(metadataCatalog(database), database, table)) {
                 while (rs.next()) {
                     pks.put(rs.getString("COLUMN_NAME"), "1");
                 }
             }
             int order = 1;
-            try (ResultSet rs = meta.getColumns(database, database, table, "%")) {
+            try (ResultSet rs = meta.getColumns(metadataCatalog(database), database, table, "%")) {
                 while (rs.next()) {
                     ColumnInfo info = new ColumnInfo();
                     info.setColumnName(rs.getString("COLUMN_NAME"));
@@ -155,6 +155,10 @@ public abstract class AbstractJdbcConnector implements DataSourceConnector {
             log.warn("统计表数据量失败 [{}]: {}", safeTable, e.getMessage());
             return -1;
         }
+    }
+
+    protected String metadataCatalog(String database) {
+        return database;
     }
 
     protected Connection open(DsConfig config) throws SQLException {

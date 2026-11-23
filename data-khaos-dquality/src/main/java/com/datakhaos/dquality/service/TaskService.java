@@ -25,6 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -145,60 +146,93 @@ public class TaskService {
             throw new BusinessException("任务不存在");
         }
         auth.checkGroup(ctx, task.getProjectGroupId(), "质量任务");
-        return runInternal(task, "MANUAL");
+        return runInternal(task, "MANUAL", null, null, null);
     }
 
     /**
      * 内部执行任务（供调度系统 / 手动执行复用）：
      * 不做权限校验，由调用方保证已授权（如调度系统以系统身份触发）。
-     * 执行完毕后若存在失败规则，则发送站内信告警。
+     * 执行完毕后若结论非 PASS，则发送站内信告警。
      */
     @Transactional(rollbackFor = Exception.class)
     public DqSnapshot runInternal(String id, String triggerType) {
+        return runInternal(id, triggerType, null, null, null);
+    }
+
+    /**
+     * 内部执行任务（工作流节点触发）：记录来源工作流运行/节点与业务日期，
+     * 供运行证据聚合与数据地图回查质量证据。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public DqSnapshot runInternal(String id, String triggerType,
+                                  String workflowRunId, String workflowNodeRunId, String bizDate) {
         DqTask task = taskMapper.selectById(id);
         if (task == null) {
             throw new BusinessException("任务不存在");
         }
-        return runInternal(task, triggerType);
+        // 跨服务调用以系统身份透传；非超级管理员时核对任务的项目组范围
+        if (!MetadataHolder.isSuperAdmin()) {
+            AuthContext ctx = auth.current();
+            auth.checkGroup(ctx, task.getProjectGroupId(), "质量任务");
+        }
+        return runInternal(task, triggerType, workflowRunId, workflowNodeRunId, bizDate);
     }
 
-    private DqSnapshot runInternal(DqTask task, String triggerType) {
+    private DqSnapshot runInternal(DqTask task, String triggerType,
+                                   String workflowRunId, String workflowNodeRunId, String bizDate) {
         List<DqRule> rules = loadRules(task.getRuleIds());
-        if (rules.isEmpty()) {
-            throw new BusinessException("任务未绑定有效规则，无法执行");
-        }
+        // 汇总同一表（取第一个规则的稽核对象；无有效规则时留空）
+        DqRule first = rules.isEmpty() ? null : rules.get(0);
+        EngineResult er = rules.isEmpty()
+                ? null
+                : engine.execute(rules, MetadataHolder.getUserId(), triggerType, bizDate);
 
-        EngineResult er = engine.execute(rules, MetadataHolder.getUserId(), triggerType);
-
-        // 汇总同一表（取第一个规则的稽核对象）
-        DqRule first = rules.get(0);
         DqSnapshot snapshot = new DqSnapshot();
         snapshot.setProjectGroupId(task.getProjectGroupId());
         snapshot.setTaskId(task.getId());
         snapshot.setTaskName(task.getTaskName());
-        snapshot.setDatasourceId(first.getDatasourceId());
-        snapshot.setDatabaseName(first.getDatabaseName());
-        snapshot.setTableName(first.getTableName());
-        snapshot.setScore(er.getScore());
-        snapshot.setRuleTotal(er.getTotalRules());
-        snapshot.setRulePass(er.getPassRules());
-        snapshot.setRuleFail(er.getFailRules());
-        snapshot.setCostMs(er.getCostMs());
+        snapshot.setWorkflowRunId(workflowRunId);
+        snapshot.setWorkflowNodeRunId(workflowNodeRunId);
+        snapshot.setBizDate(bizDate);
+        snapshot.setDatasourceId(first == null ? null : first.getDatasourceId());
+        snapshot.setDatabaseName(first == null ? null : first.getDatabaseName());
+        snapshot.setTableName(first == null ? null : first.getTableName());
+        if (er == null) {
+            // 无有效规则：无法判定，按 ERROR 留痕（工作流门禁应阻断下游）
+            snapshot.setScore(BigDecimal.ZERO);
+            snapshot.setRuleTotal(0);
+            snapshot.setRulePass(0);
+            snapshot.setRuleFail(0);
+            snapshot.setCostMs(0L);
+            snapshot.setConclusion(QualityEngine.CONCLUSION_ERROR);
+            snapshot.setErrorCode("ZERO_VALID_RULES");
+        } else {
+            snapshot.setScore(er.getScore());
+            snapshot.setRuleTotal(er.getTotalRules());
+            snapshot.setRulePass(er.getPassRules());
+            snapshot.setRuleFail(er.getFailRules());
+            snapshot.setCostMs(er.getCostMs());
+            snapshot.setConclusion(er.getConclusion());
+            snapshot.setErrorCode(er.getErrorCode());
+        }
         snapshot.setTriggerType(triggerType);
         snapshot.setCreateBy(MetadataHolder.getUserId());
         snapshotMapper.insert(snapshot);
 
-        for (DqRuleResult r : er.getResults()) {
-            r.setId(null);
-            r.setSnapshotId(snapshot.getId());
-            ruleResultMapper.insert(r);
+        if (er != null) {
+            for (DqRuleResult r : er.getResults()) {
+                r.setId(null);
+                r.setSnapshotId(snapshot.getId());
+                ruleResultMapper.insert(r);
+            }
         }
 
-        log.info("质量任务 [{}] 执行完成: 评分 {}, 通过 {}/{}, 触发方式 {}",
-                task.getId(), er.getScore(), er.getPassRules(), er.getTotalRules(), triggerType);
+        log.info("质量任务 [{}] 执行完成: 结论 {}, 评分 {}, 通过 {}/{}, 触发方式 {}, 业务日 {}",
+                task.getId(), snapshot.getConclusion(), snapshot.getScore(),
+                snapshot.getRulePass(), snapshot.getRuleTotal(), triggerType, bizDate);
 
-        // 失败告警：存在失败规则且当前是系统调度触发时发送站内信
-        if (er.getFailRules() > 0) {
+        // 告警：结论非 PASS（FAIL 或 ERROR）时发送站内信
+        if (!QualityEngine.CONCLUSION_PASS.equals(snapshot.getConclusion())) {
             sendAlert(task, snapshot);
         }
         return snapshot;
@@ -208,9 +242,10 @@ public class TaskService {
         String title = String.format("数据质量告警：%s 质量评分 %.2f",
                 task.getTaskName(), snapshot.getScore() == null ? 0 : snapshot.getScore());
         String content = String.format(
-                "任务【%s】本次稽核完成：共 %d 条规则，通过 %d 条，失败 %d 条，评分 %.2f。\n" +
+                "任务【%s】本次稽核完成：结论 %s，共 %d 条规则，通过 %d 条，失败 %d 条，评分 %.2f。\n" +
                         "稽核对象：%s.%s\n请前往数据质量模块查看详情。",
                 task.getTaskName(),
+                snapshot.getConclusion() == null ? "-" : snapshot.getConclusion(),
                 snapshot.getRuleTotal() == null ? 0 : snapshot.getRuleTotal(),
                 snapshot.getRulePass() == null ? 0 : snapshot.getRulePass(),
                 snapshot.getRuleFail() == null ? 0 : snapshot.getRuleFail(),

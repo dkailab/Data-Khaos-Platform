@@ -1,6 +1,7 @@
 package com.datakhaos.datasource.connector;
 
 import com.datakhaos.datasource.api.model.DsConfig;
+import com.datakhaos.datasource.api.model.JdbcConnectionUrls;
 import org.springframework.stereotype.Component;
 
 /**
@@ -21,6 +22,6 @@ public class HiveConnector extends AbstractJdbcConnector {
 
     @Override
     public String buildJdbcUrl(DsConfig config) {
-        return "jdbc:hive2://" + hostPort(config, 10000) + "/" + db(config);
+        return JdbcConnectionUrls.hive(hostPort(config, 10000), config.getDatabaseName(), config.getProperties());
     }
 }

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 行/列级数据权限策略管理
@@ -22,6 +23,18 @@ public class PolicyService {
 
     private final SysRowPolicyMapper rowPolicyMapper;
     private final SysColumnPolicyMapper columnPolicyMapper;
+
+    /** Materialization preview requires table-wide visibility. Accept both policy naming forms. */
+    public boolean hasActiveTablePolicy(String database, String table) {
+        String simple = table.toLowerCase(Locale.ROOT);
+        String qualified = database.toLowerCase(Locale.ROOT) + "." + simple;
+        return rowPolicyMapper.exists(new LambdaQueryWrapper<SysRowPolicy>()
+                .eq(SysRowPolicy::getStatus, 1)
+                .apply("LOWER(target_table) IN ({0}, {1})", simple, qualified))
+                || columnPolicyMapper.exists(new LambdaQueryWrapper<SysColumnPolicy>()
+                .eq(SysColumnPolicy::getStatus, 1)
+                .apply("LOWER(target_table) IN ({0}, {1})", simple, qualified));
+    }
 
     // ---------- 行权限 ----------
 

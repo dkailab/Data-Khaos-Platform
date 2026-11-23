@@ -47,6 +47,12 @@ public class PipelineTask implements Serializable {
     /** 引擎扩展配置（JSON） */
     private String config;
 
+    /** 写入策略 REPLACE_BY_BIZ_DATE/APPEND/TRUNCATE（空=APPEND） */
+    private String writeMode;
+
+    /** 业务日期列（REPLACE_BY_BIZ_DATE 使用） */
+    private String dateColumn;
+
     /** 定时表达式（空=仅手动） */
     private String cronExpr;
 

@@ -18,4 +18,6 @@ public final class NodeType {
     public static final String DATA_OP = "DATA_OP";
     /** 管道任务节点（触发 pipeline 并等待完成） */
     public static final String PIPELINE = "PIPELINE";
+    /** 质量稽核节点（触发质量任务并阻塞门禁） */
+    public static final String QUALITY = "QUALITY";
 }

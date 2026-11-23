@@ -8,6 +8,8 @@ import com.datakhaos.common.security.MetadataHolder;
 import com.datakhaos.common.model.PageResult;
 import com.datakhaos.permission.api.service.PermissionConstants;
 import com.datakhaos.pipeline.engine.EngineFactory;
+import com.datakhaos.pipeline.dto.PipelinePreflight;
+import com.datakhaos.pipeline.engine.impl.DbSyncEngine;
 import com.datakhaos.pipeline.entity.PipelineInstance;
 import com.datakhaos.pipeline.entity.PipelineTask;
 import com.datakhaos.pipeline.mapper.PipelineTaskMapper;
@@ -20,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * 管道任务服务：CRUD + 手动/定时触发。
@@ -101,7 +104,7 @@ public class PipelineTaskService {
 
     /** 手动触发运行 */
     public PipelineInstance run(String taskId) {
-        return run(taskId, "MANUAL", null, null);
+        return run(taskId, "MANUAL", null, null, null);
     }
 
     /**
@@ -111,9 +114,10 @@ public class PipelineTaskService {
      * @param triggerType        MANUAL/CRON/SCHEDULE/WORKFLOW
      * @param workflowRunId     关联工作流运行ID（可空）
      * @param workflowNodeRunId 关联工作流节点运行ID（可空）
+     * @param bizDate           业务日期 YYYY-MM-DD（按日重算使用，可空）
      */
     public PipelineInstance run(String taskId, String triggerType,
-                                String workflowRunId, String workflowNodeRunId) {
+                                String workflowRunId, String workflowNodeRunId, String bizDate) {
         PipelineTask task = get(taskId);
         boolean manual = "MANUAL".equals(triggerType);
         if (!manual || StrUtil.isNotBlank(workflowRunId) || StrUtil.isNotBlank(workflowNodeRunId)) {
@@ -134,9 +138,30 @@ public class PipelineTaskService {
                 throw new BusinessException("任务已停用，请先启用");
             }
         }
-        PipelineInstance instance = runner.createInstance(task, triggerType, workflowRunId, workflowNodeRunId);
-        executor.execute(() -> runner.execute(task, instance));
+        PipelineRunner.Admission admission = "WORKFLOW".equals(triggerType)
+                ? runner.admitWorkflow(task, workflowRunId, workflowNodeRunId, bizDate)
+                : new PipelineRunner.Admission(
+                        runner.createInstance(task, triggerType, workflowRunId, workflowNodeRunId, bizDate), true);
+        PipelineInstance instance = admission.instance();
+        if (admission.newlyCreated()) {
+            try {
+                executor.execute(() -> runner.execute(task, instance));
+            } catch (RejectedExecutionException e) {
+                runner.rejectQueued(instance);
+            }
+        }
         return instance;
+    }
+
+    public PipelinePreflight preflight(String id, String bizDate) throws Exception {
+        PipelineAuthContext.AuthContext ctx = auth.current();
+        auth.requireCap(ctx, PermissionConstants.CAP_PIPELINE_RUN);
+        PipelineTask task = get(id);
+        auth.checkGroup(ctx, task.getProjectGroupId(), "同步任务");
+        if (!(engineFactory.get(task.getEngine()) instanceof DbSyncEngine dbSync)) {
+            throw new BusinessException("当前预检支持 Hive DB-Sync 加载");
+        }
+        return dbSync.preflight(task, bizDate);
     }
 
     private void validate(PipelineTask task) {

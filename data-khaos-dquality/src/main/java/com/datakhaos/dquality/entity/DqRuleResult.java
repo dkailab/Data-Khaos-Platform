@@ -27,6 +27,9 @@ public class DqRuleResult implements Serializable {
     /** 0失败 1通过 */
     private Integer passed;
 
+    /** 规则执行异常码（为空表示规则已正常判定，passed=0 即规则不满足） */
+    private String errorCode;
+
     /** 实际值（如空值率） */
     private BigDecimal actualValue;
 

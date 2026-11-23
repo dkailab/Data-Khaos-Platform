@@ -41,6 +41,9 @@ public class DqRule implements Serializable {
 
     private String columnName;
 
+    /** 业务日期列（提供且运行时传入 bizDate 时按该列过滤） */
+    private String dateColumn;
+
     /** 规则配置 JSON */
     private String ruleConfig;
 

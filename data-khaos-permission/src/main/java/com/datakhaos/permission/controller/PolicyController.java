@@ -2,6 +2,9 @@ package com.datakhaos.permission.controller;
 
 import com.datakhaos.common.model.PageResult;
 import com.datakhaos.common.model.R;
+import com.datakhaos.common.model.ResultCode;
+import com.datakhaos.common.exception.BusinessException;
+import com.datakhaos.common.security.MetadataHolder;
 import com.datakhaos.permission.entity.SysColumnPolicy;
 import com.datakhaos.permission.entity.SysRowPolicy;
 import com.datakhaos.permission.service.PolicyService;
@@ -75,6 +78,17 @@ public class PolicyController {
     public R<Void> deleteColumn(@PathVariable String id) {
         policyService.deleteColumn(id);
         return R.ok();
+    }
+
+    @GetMapping("/table-restricted")
+    public R<Boolean> tableRestricted(@RequestParam String database, @RequestParam String table) {
+        if (MetadataHolder.getUserId() == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        if (!database.matches("[A-Za-z_][A-Za-z0-9_]{0,63}") || !table.matches("[A-Za-z_][A-Za-z0-9_]{0,63}")) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED);
+        }
+        return R.ok(policyService.hasActiveTablePolicy(database, table));
     }
 
     // ==================== 查询接口（供 SQL 改写引擎使用） ====================

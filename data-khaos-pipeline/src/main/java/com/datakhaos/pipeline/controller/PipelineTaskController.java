@@ -2,6 +2,7 @@ package com.datakhaos.pipeline.controller;
 
 import com.datakhaos.common.model.PageResult;
 import com.datakhaos.common.model.R;
+import com.datakhaos.pipeline.dto.PipelinePreflight;
 import com.datakhaos.pipeline.entity.PipelineInstance;
 import com.datakhaos.pipeline.entity.PipelineTask;
 import com.datakhaos.pipeline.service.PipelineTaskService;
@@ -60,14 +61,24 @@ public class PipelineTaskController {
         return R.ok();
     }
 
-    @Operation(summary = "手动触发运行")
+    @Operation(summary = "触发运行")
     @PostMapping("/{id}/run")
     public R<PipelineInstance> run(@PathVariable String id,
                                    @RequestParam(defaultValue = "MANUAL") String triggerType,
                                    @RequestParam(required = false) String workflowRunId,
-                                   @RequestParam(required = false) String workflowNodeRunId) {
-        return R.ok(taskService.run(id, triggerType, workflowRunId, workflowNodeRunId));
+                                   @RequestParam(required = false) String workflowNodeRunId,
+                                   @RequestParam(required = false) String bizDate) {
+        return R.ok(taskService.run(id, triggerType, workflowRunId, workflowNodeRunId, bizDate));
     }
+
+    @Operation(summary = "预检已保存的 Hive 加载任务")
+    @PostMapping("/{id}/preflight")
+    public R<PipelinePreflight> preflight(@PathVariable String id,
+                                          @RequestBody(required = false) PreflightInput input) throws Exception {
+        return R.ok(taskService.preflight(id, input == null ? null : input.bizDate()));
+    }
+
+    public record PreflightInput(String bizDate) {}
 
     @Operation(summary = "引擎列表（可扩展）")
     @GetMapping("/engines")

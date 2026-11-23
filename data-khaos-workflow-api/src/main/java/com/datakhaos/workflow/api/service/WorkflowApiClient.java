@@ -3,8 +3,12 @@ package com.datakhaos.workflow.api.service;
 import cn.hutool.core.util.StrUtil;
 import com.datakhaos.common.constant.CommonConstants;
 import com.datakhaos.common.model.R;
+import com.datakhaos.workflow.api.model.BackfillResultDto;
+import com.datakhaos.workflow.api.model.RunAcceptDto;
+import com.datakhaos.workflow.api.model.WorkflowBackfillRequestDto;
 import com.datakhaos.workflow.api.model.WorkflowNodeRunDto;
 import com.datakhaos.workflow.api.model.WorkflowRunDto;
+import com.datakhaos.workflow.api.model.WorkflowRunRequestDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
@@ -15,6 +19,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -75,6 +81,107 @@ public class WorkflowApiClient {
         return body.getData();
     }
 
+    /**
+     * 带业务日期与幂等键的触发（PR2A 调度/补数入口）。
+     *
+     * @return 受理结果（ACCEPTED / DUPLICATE / REJECTED）；拒绝时携带 rejectCode
+     */
+    public RunAcceptDto triggerWithRequest(String wfId, Map<String, Object> params, String triggerType,
+                                           String scheduleJobId, String scheduleLogId,
+                                           String requestId, String bizDate, LocalDateTime scheduledAt) {
+        StringBuilder url = new StringBuilder(SERVICE_URL).append("/").append(wfId)
+                .append("/trigger?triggerType=").append(triggerType);
+        Map<String, Object> vars = new HashMap<>();
+        appendVar(url, vars, "&scheduleJobId={scheduleJobId}", "scheduleJobId", scheduleJobId);
+        appendVar(url, vars, "&scheduleLogId={scheduleLogId}", "scheduleLogId", scheduleLogId);
+        appendVar(url, vars, "&requestId={requestId}", "requestId", requestId);
+        appendVar(url, vars, "&bizDate={bizDate}", "bizDate", bizDate);
+        if (scheduledAt != null) {
+            url.append("&scheduledAt={scheduledAt}");
+            vars.put("scheduledAt", scheduledAt.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        }
+        ResponseEntity<R<RunAcceptDto>> resp = restTemplate.exchange(
+                url.toString(),
+                HttpMethod.POST,
+                new HttpEntity<>(params, systemHeaders()),
+                new ParameterizedTypeReference<R<RunAcceptDto>>() {},
+                vars);
+        R<RunAcceptDto> body = resp.getBody();
+        if (body == null || body.getCode() != 0) {
+            throw new IllegalStateException("触发工作流失败: " + (body == null ? "无响应" : body.getMsg()));
+        }
+        return body.getData();
+    }
+
+    /** 带业务日期的手动运行 */
+    public RunAcceptDto runByRequest(String wfId, WorkflowRunRequestDto request) {
+        try {
+            ResponseEntity<R<RunAcceptDto>> resp = restTemplate.exchange(
+                    SERVICE_URL + "/{id}/runs",
+                    HttpMethod.POST,
+                    new HttpEntity<>(request, systemHeaders()),
+                    new ParameterizedTypeReference<R<RunAcceptDto>>() {},
+                    wfId);
+            R<RunAcceptDto> body = resp.getBody();
+            if (body != null && body.getCode() == 0) {
+                return body.getData();
+            }
+            throw new IllegalStateException(body == null ? "运行受理无响应" : body.getMsg());
+        } catch (RestClientException e) {
+            throw new IllegalStateException("运行受理失败: " + e.getMessage(), e);
+        }
+    }
+
+    /** 区间补数（含首尾，最多 31 天） */
+    public BackfillResultDto backfill(String wfId, WorkflowBackfillRequestDto request) {
+        try {
+            ResponseEntity<R<BackfillResultDto>> resp = restTemplate.exchange(
+                    SERVICE_URL + "/{id}/backfills",
+                    HttpMethod.POST,
+                    new HttpEntity<>(request, systemHeaders()),
+                    new ParameterizedTypeReference<R<BackfillResultDto>>() {},
+                    wfId);
+            R<BackfillResultDto> body = resp.getBody();
+            if (body != null && body.getCode() == 0) {
+                return body.getData();
+            }
+            throw new IllegalStateException(body == null ? "补数受理无响应" : body.getMsg());
+        } catch (RestClientException e) {
+            throw new IllegalStateException("补数受理失败: " + e.getMessage(), e);
+        }
+    }
+
+    /** 按工作流与业务日期分页查询运行 */
+    public List<WorkflowRunDto> runPage(String wfId, String bizDate, long current, long size) {
+        try {
+            StringBuilder url = new StringBuilder(SERVICE_URL).append("/run/page?current=").append(current)
+                    .append("&size=").append(size);
+            Map<String, Object> vars = new HashMap<>();
+            appendVar(url, vars, "&wfId={wfId}", "wfId", wfId);
+            appendVar(url, vars, "&bizDate={bizDate}", "bizDate", bizDate);
+            ResponseEntity<R<List<WorkflowRunDto>>> resp = restTemplate.exchange(
+                    url.toString(),
+                    HttpMethod.GET,
+                    new HttpEntity<>(null, systemHeaders()),
+                    new ParameterizedTypeReference<R<List<WorkflowRunDto>>>() {},
+                    vars);
+            R<List<WorkflowRunDto>> body = resp.getBody();
+            if (body != null && body.getCode() == 0) {
+                return body.getData();
+            }
+        } catch (Exception e) {
+            log.warn("分页查询工作流运行异常: wfId={}, bizDate={}, error={}", wfId, bizDate, e.getMessage());
+        }
+        return List.of();
+    }
+
+    private void appendVar(StringBuilder url, Map<String, Object> vars, String template, String name, String value) {
+        if (StrUtil.isNotBlank(value)) {
+            url.append(template);
+            vars.put(name, value);
+        }
+    }
+
     public WorkflowRunDto findByScheduleLog(String workflowId, String scheduleLogId) {
         try {
             R<WorkflowRunDto> body = restTemplate.exchange(
@@ -82,7 +189,8 @@ public class WorkflowApiClient {
                     new HttpEntity<>(null, systemHeaders()),
                     new ParameterizedTypeReference<R<WorkflowRunDto>>() {}, workflowId, scheduleLogId).getBody();
             return body != null && body.getCode() == 0 ? body.getData() : null;
-        } catch (RestClientException e) {
+        } catch (Exception e) {
+            // 服务不可达（如负载均衡无实例）时同样返回 null，由调用方按「提交未知」处理，不重试
             log.warn("按调度日志反查工作流失败: scheduleLogId={}, error={}", scheduleLogId, e.getMessage());
             return null;
         }
@@ -129,7 +237,7 @@ public class WorkflowApiClient {
     }
 
     /**
-     * 等待运行到达终态（SUCCESS / FAILED / STOP）。
+     * 等待运行到达终态（SUCCESS / FAILED / STOP / RECOVERY_REQUIRED）。
      * 超时抛出 {@link RunTimeoutException}，消息中携带最后已知状态，便于诊断。
      */
     public WorkflowRunDto waitForRun(String runId, int timeoutSeconds) {
@@ -151,7 +259,7 @@ public class WorkflowApiClient {
 
     /** 是否为终态 */
     public static boolean isFinal(String status) {
-        return "SUCCESS".equals(status) || "FAILED".equals(status) || "STOP".equals(status);
+        return "SUCCESS".equals(status) || "FAILED".equals(status) || "STOP".equals(status) || "RECOVERY_REQUIRED".equals(status);
     }
 
     private HttpHeaders systemHeaders() {

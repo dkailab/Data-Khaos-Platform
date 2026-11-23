@@ -5,7 +5,9 @@ import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.datakhaos.common.exception.BusinessException;
 import com.datakhaos.common.model.PageResult;
+import com.datakhaos.common.model.ResultCode;
 import com.datakhaos.permission.api.model.ProjectGroupDto;
+import com.datakhaos.permission.api.model.ProjectWorkspaceResourceDto;
 import com.datakhaos.permission.entity.SgProjectGroup;
 import com.datakhaos.permission.entity.SgProjectGroupMember;
 import com.datakhaos.permission.entity.SgProjectGroupResource;
@@ -23,6 +25,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -40,24 +43,41 @@ public class ProjectGroupService {
     private final SgProjectRoleMapper roleMapper;
     private final SgProjectGroupResourceMapper resourceMapper;
 
+    public boolean isActiveUser(String userId) {
+        return memberMapper.countActiveUser(userId) > 0;
+    }
+
     // ---------- 项目组 CRUD ----------
 
-    public PageResult<SgProjectGroup> page(long current, long size, String orgId, String keyword) {
+    public PageResult<SgProjectGroup> page(long current, long size, String orgId, String keyword, List<String> allowedIds) {
+        if (allowedIds != null && allowedIds.isEmpty()) {
+            return PageResult.of(current, size, 0, List.of());
+        }
         LambdaQueryWrapper<SgProjectGroup> wrapper = new LambdaQueryWrapper<SgProjectGroup>()
                 .eq(StrUtil.isNotBlank(orgId), SgProjectGroup::getOrgId, orgId)
                 .and(StrUtil.isNotBlank(keyword), w -> w
                         .like(SgProjectGroup::getProjectName, keyword)
                         .or().like(SgProjectGroup::getProjectCode, keyword))
                 .orderByAsc(SgProjectGroup::getSortOrder);
+        if (allowedIds != null) {
+            wrapper.in(SgProjectGroup::getId, allowedIds);
+        }
         var result = groupMapper.selectPage(
                 com.baomidou.mybatisplus.extension.plugins.pagination.Page.of(current, size), wrapper);
         return PageResult.of(current, size, result.getTotal(), result.getRecords());
     }
 
-    public List<SgProjectGroup> list(String orgId) {
-        return groupMapper.selectList(new LambdaQueryWrapper<SgProjectGroup>()
+    public List<SgProjectGroup> list(String orgId, List<String> allowedIds) {
+        if (allowedIds != null && allowedIds.isEmpty()) {
+            return List.of();
+        }
+        var query = new LambdaQueryWrapper<SgProjectGroup>()
                 .eq(StrUtil.isNotBlank(orgId), SgProjectGroup::getOrgId, orgId)
-                .orderByAsc(SgProjectGroup::getSortOrder));
+                .orderByAsc(SgProjectGroup::getSortOrder);
+        if (allowedIds != null) {
+            query.in(SgProjectGroup::getId, allowedIds);
+        }
+        return groupMapper.selectList(query);
     }
 
     public void save(SgProjectGroup group) {
@@ -100,7 +120,7 @@ public class ProjectGroupService {
                 .collect(Collectors.toMap(SgProjectRole::getId, r -> r));
         List<Map<String, Object>> result = new ArrayList<>();
         for (SgProjectGroupMember m : members) {
-            SgProjectRole role = roleMap.get(m.getProjectRoleId());
+            SgProjectRole role = m.getProjectRoleId() == null ? null : roleMap.get(m.getProjectRoleId());
             result.add(Map.of(
                     "memberId", m.getId(),
                     "userId", m.getUserId(),
@@ -113,27 +133,120 @@ public class ProjectGroupService {
         return result;
     }
 
-    /**
-     * 设置项目组成员（全量替换）。默认把首个成员列为主项目组。
-     */
+    /** 在同一事务校验并替换成员。 */
     @Transactional(rollbackFor = Exception.class)
-    public void assignMembers(String projectGroupId, List<MemberAssign> assigns) {
+    public void assignMembers(String projectGroupId, List<MemberAssign> assigns, String actorId) {
+        SgProjectGroup group = lockManagedGroup(projectGroupId, actorId, true);
+        if (assigns == null) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "成员列表不能为空");
+        }
+        Set<String> userIds = new LinkedHashSet<>();
+        Set<String> roleIds = new LinkedHashSet<>();
+        for (MemberAssign assignment : assigns) {
+            if (assignment == null || StrUtil.isBlank(assignment.userId()) || StrUtil.isBlank(assignment.projectRoleId())
+                    || !userIds.add(assignment.userId())) {
+                throw new BusinessException(ResultCode.VALIDATE_FAILED, "请提供唯一的有效成员和角色");
+            }
+            if (memberMapper.countActiveUser(assignment.userId()) == 0
+                    && selectMember(projectGroupId, assignment.userId()) == null) {
+                throw new BusinessException(ResultCode.NOT_FOUND, "成员用户不存在或已停用");
+            }
+            roleIds.add(assignment.projectRoleId());
+        }
+        Map<String, SgProjectRole> roles = roleIds.isEmpty() ? Map.of() : roleMapper.selectBatchIds(roleIds).stream()
+                .filter(role -> isEligibleRole(group, role)).collect(Collectors.toMap(SgProjectRole::getId, role -> role));
+        if (roles.size() != roleIds.size()) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "成员角色未启用或不属于当前项目");
+        }
         memberMapper.delete(new LambdaQueryWrapper<SgProjectGroupMember>()
                 .eq(SgProjectGroupMember::getProjectGroupId, projectGroupId));
-        if (assigns == null || assigns.isEmpty()) {
-            return;
+        for (MemberAssign assignment : assigns) {
+            SgProjectGroupMember member = new SgProjectGroupMember();
+            member.setProjectGroupId(projectGroupId);
+            member.setUserId(assignment.userId());
+            member.setProjectRoleId(assignment.projectRoleId());
+            member.setIsPrimary(Boolean.TRUE.equals(assignment.primary()) ? 1 : 0);
+            memberMapper.insert(member);
         }
-        boolean hasPrimary = assigns.stream().anyMatch(a -> Boolean.TRUE.equals(a.primary()));
-        for (int i = 0; i < assigns.size(); i++) {
-            MemberAssign a = assigns.get(i);
-            SgProjectGroupMember m = new SgProjectGroupMember();
-            m.setProjectGroupId(projectGroupId);
-            m.setUserId(a.userId());
-            m.setProjectRoleId(a.projectRoleId());
-            boolean primary = !hasPrimary && i == 0;
-            m.setIsPrimary(primary || Boolean.TRUE.equals(a.primary()) ? 1 : 0);
-            memberMapper.insert(m);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void setMember(String projectId, String userId, String roleId, Boolean primary,
+                          String actorId, boolean platformAdmin) {
+        SgProjectGroup group = lockManagedGroup(projectId, actorId, platformAdmin);
+        SgProjectRole role = StrUtil.isBlank(roleId) ? null : roleMapper.selectById(roleId);
+        if (!isEligibleRole(group, role)) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "成员角色未启用或不属于当前项目");
         }
+        if (!platformAdmin && actorId.equals(userId) && !parseFlags(role.getCapabilityFlags()).contains("pg:manage")) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "项目管理者不能移除自身管理权限");
+        }
+        SgProjectGroupMember member = selectMember(projectId, userId);
+        if (member == null) {
+            if (memberMapper.countActiveUser(userId) == 0) {
+                throw new BusinessException(ResultCode.NOT_FOUND, "成员用户不存在或已停用");
+            }
+            member = new SgProjectGroupMember();
+            member.setProjectGroupId(projectId);
+            member.setUserId(userId);
+        }
+        member.setProjectRoleId(roleId);
+        if (platformAdmin && primary != null) {
+            member.setIsPrimary(primary ? 1 : 0);
+        }
+        if (member.getId() == null) {
+            memberMapper.insert(member);
+        } else {
+            memberMapper.updateById(member);
+        }
+        log.info("项目成员设置 projectId={} memberUserId={} roleId={} actorId={}", projectId, userId, roleId, actorId);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void removeMember(String projectId, String userId, String actorId, boolean platformAdmin) {
+        lockManagedGroup(projectId, actorId, platformAdmin);
+        if (!platformAdmin && actorId.equals(userId)) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "项目管理者不能移除自身成员身份");
+        }
+        memberMapper.delete(new LambdaQueryWrapper<SgProjectGroupMember>()
+                .eq(SgProjectGroupMember::getProjectGroupId, projectId).eq(SgProjectGroupMember::getUserId, userId));
+        log.info("项目成员移除 projectId={} memberUserId={} actorId={}", projectId, userId, actorId);
+    }
+
+    private SgProjectGroupMember selectMember(String projectId, String userId) {
+        return memberMapper.selectOne(new LambdaQueryWrapper<SgProjectGroupMember>()
+                .eq(SgProjectGroupMember::getProjectGroupId, projectId).eq(SgProjectGroupMember::getUserId, userId));
+    }
+
+    private SgProjectGroup lockManagedGroup(String projectGroupId, String actorId, boolean platformAdmin) {
+        SgProjectGroup group = groupMapper.selectOne(new LambdaQueryWrapper<SgProjectGroup>()
+                .eq(SgProjectGroup::getId, projectGroupId).last("FOR UPDATE"));
+        if (group == null || !Integer.valueOf(1).equals(group.getStatus())) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "项目不存在或未启用");
+        }
+        if (!platformAdmin && !getCapabilityFlags(actorId, projectGroupId).contains("pg:manage")) {
+            throw new BusinessException(ResultCode.FORBIDDEN);
+        }
+        return group;
+    }
+
+    public List<SgProjectRole> assignableRoles(String projectGroupId) {
+        SgProjectGroup group = groupMapper.selectById(projectGroupId);
+        if (group == null || !Integer.valueOf(1).equals(group.getStatus())) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "项目不存在或未启用");
+        }
+        return roleMapper.selectList(new LambdaQueryWrapper<SgProjectRole>()
+                        .eq(SgProjectRole::getStatus, 1)
+                        .and(query -> query.eq(SgProjectRole::getProjectGroupId, projectGroupId)
+                                .or().isNull(SgProjectRole::getProjectGroupId))
+                        .orderByAsc(SgProjectRole::getSortOrder, SgProjectRole::getId))
+                .stream().filter(role -> isEligibleRole(group, role)).toList();
+    }
+
+    private boolean isEligibleRole(SgProjectGroup group, SgProjectRole role) {
+        return role != null && Integer.valueOf(1).equals(role.getStatus())
+                && (role.getOrgId() == null || Objects.equals(role.getOrgId(), group.getOrgId()))
+                && (role.getProjectGroupId() == null || Objects.equals(role.getProjectGroupId(), group.getId()));
     }
 
     // ---------- 角色 CRUD（能力位） ----------
@@ -181,10 +294,29 @@ public class ProjectGroupService {
         if (resources == null) {
             return;
         }
-        for (SgProjectGroupResource r : resources) {
-            r.setProjectGroupId(projectGroupId);
-            resourceMapper.insert(r);
+        SgProjectGroup group = groupMapper.selectById(projectGroupId);
+        if (group == null || !Integer.valueOf(1).equals(group.getStatus())) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "项目不存在或未启用");
         }
+        for (SgProjectGroupResource input : resources) {
+            if (input == null || StrUtil.isBlank(input.getResourceType()) || StrUtil.isBlank(input.getResourceId())) {
+                throw new BusinessException(ResultCode.VALIDATE_FAILED, "资源类型和 ID 不能为空");
+            }
+            String type = input.getResourceType().trim().toUpperCase(java.util.Locale.ROOT);
+            String resourceId = input.getResourceId().trim();
+            if ("DATASOURCE".equals(type) && resourceMapper.countAvailableDatasource(resourceId) == 0) {
+                throw new BusinessException(ResultCode.NOT_FOUND, "数据源不存在或未启用");
+            }
+            SgProjectGroupResource binding = new SgProjectGroupResource();
+            binding.setProjectGroupId(projectGroupId);
+            binding.setResourceType(type);
+            binding.setResourceId(resourceId);
+            resourceMapper.insert(binding);
+        }
+    }
+
+    public List<ProjectWorkspaceResourceDto> listWorkspaceResources(String projectId) {
+        return resourceMapper.listWorkspaceResources(projectId);
     }
 
     public void deleteResource(String id) {
@@ -197,6 +329,9 @@ public class ProjectGroupService {
      * 查询用户加入的项目组（含组内角色与能力位），并标记主项目组。
      */
     public List<ProjectGroupDto> getUserProjectGroups(String userId) {
+        if (StrUtil.isBlank(userId)) {
+            return List.of();
+        }
         List<SgProjectGroupMember> members = memberMapper.selectList(new LambdaQueryWrapper<SgProjectGroupMember>()
                 .eq(SgProjectGroupMember::getUserId, userId));
         if (members.isEmpty()) {
@@ -204,7 +339,7 @@ public class ProjectGroupService {
         }
         List<String> groupIds = members.stream().map(SgProjectGroupMember::getProjectGroupId).distinct().toList();
         Map<String, SgProjectGroup> groupMap = groupMapper.selectBatchIds(groupIds).stream()
-                .filter(g -> g.getStatus() == null || g.getStatus() == 1)
+                .filter(g -> Integer.valueOf(1).equals(g.getStatus()))
                 .collect(Collectors.toMap(SgProjectGroup::getId, g -> g));
         List<String> roleIds = members.stream().map(SgProjectGroupMember::getProjectRoleId)
                 .filter(StrUtil::isNotBlank).distinct().toList();
@@ -218,7 +353,7 @@ public class ProjectGroupService {
             if (group == null) {
                 continue;
             }
-            SgProjectRole role = roleMap.get(m.getProjectRoleId());
+            SgProjectRole role = m.getProjectRoleId() == null ? null : roleMap.get(m.getProjectRoleId());
             ProjectGroupDto dto = new ProjectGroupDto();
             dto.setId(group.getId());
             dto.setOrgId(group.getOrgId());
@@ -226,12 +361,14 @@ public class ProjectGroupService {
             dto.setProjectCode(group.getProjectCode());
             dto.setLeaderId(group.getLeaderId());
             dto.setPrimary(m.getIsPrimary() != null && m.getIsPrimary() == 1);
-            if (role != null) {
+            if (isEligibleRole(group, role)) {
                 dto.setRoleCode(role.getRoleCode());
                 dto.setCapabilityFlags(parseFlags(role.getCapabilityFlags()));
             }
             result.add(dto);
         }
+        result.sort(java.util.Comparator.comparing(ProjectGroupDto::getPrimary).reversed()
+                .thenComparing(ProjectGroupDto::getId));
         return result;
     }
 
@@ -248,21 +385,9 @@ public class ProjectGroupService {
      * 合并用户在指定项目组内的能力位（当前组角色的能力位集合）。
      */
     public List<String> getCapabilityFlags(String userId, String projectGroupId) {
-        if (StrUtil.isBlank(projectGroupId)) {
-            ProjectGroupDto current = getCurrentProjectGroup(userId);
-            if (current == null) {
-                return List.of();
-            }
-            projectGroupId = current.getId();
-        }
-        SgProjectGroupMember m = memberMapper.selectOne(new LambdaQueryWrapper<SgProjectGroupMember>()
-                .eq(SgProjectGroupMember::getUserId, userId)
-                .eq(SgProjectGroupMember::getProjectGroupId, projectGroupId));
-        if (m == null || StrUtil.isBlank(m.getProjectRoleId())) {
-            return List.of();
-        }
-        SgProjectRole role = roleMapper.selectById(m.getProjectRoleId());
-        return role == null ? List.of() : parseFlags(role.getCapabilityFlags());
+        return getUserProjectGroups(userId).stream()
+                .filter(group -> StrUtil.isBlank(projectGroupId) || projectGroupId.equals(group.getId()))
+                .findFirst().map(ProjectGroupDto::getCapabilityFlags).orElseGet(List::of);
     }
 
     /** 解析能力位 JSON 数组字符串为去重、保序列表 */

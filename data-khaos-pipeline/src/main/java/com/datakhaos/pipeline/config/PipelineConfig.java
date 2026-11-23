@@ -3,9 +3,9 @@ package com.datakhaos.pipeline.config;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * 管道执行线程池 + 引擎配置
@@ -21,14 +21,29 @@ public class PipelineConfig {
     private int queueCapacity;
 
     @Bean("pipelineTaskExecutor")
+    @Primary
     public ThreadPoolTaskExecutor pipelineTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(corePoolSize);
         executor.setMaxPoolSize(maxPoolSize);
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("pipeline-run-");
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setRejectedExecutionHandler((task, pool) -> {
+            if (pool.isShutdown()) throw new java.util.concurrent.RejectedExecutionException("管道线程池已关闭");
+            task.run();
+        });
         executor.initialize();
+        return executor;
+    }
+    @Bean("workspacePipelineExecutor")
+    public ThreadPoolTaskExecutor workspacePipelineExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(32);
+        executor.setThreadNamePrefix("workspace-pipeline-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(45);
         return executor;
     }
 }

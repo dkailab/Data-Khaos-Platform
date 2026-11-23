@@ -13,6 +13,7 @@ import com.datakhaos.schedule.client.DQualityApiClient;
 import com.datakhaos.schedule.entity.ScheduleJob;
 import com.datakhaos.schedule.entity.ScheduleJobLog;
 import com.datakhaos.schedule.mapper.ScheduleJobLogMapper;
+import com.datakhaos.workflow.api.model.RunAcceptDto;
 import com.datakhaos.workflow.api.model.WorkflowRunDto;
 import com.datakhaos.workflow.api.service.WorkflowApiClient;
 import lombok.RequiredArgsConstructor;
@@ -21,7 +22,11 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -47,17 +52,33 @@ public class JobExecutor {
     /** 正在运行的任务ID（防止并发触发同一任务） */
     private final Set<String> running = ConcurrentHashMap.newKeySet();
 
+    /** 业务日期时区：计划触发时刻统一按上海时间解释 */
+    private static final ZoneId BIZ_ZONE = ZoneId.of("Asia/Shanghai");
+
+    private static final DateTimeFormatter REQUEST_KEY_FMT = DateTimeFormatter.ofPattern("yyyyMMddHHmm");
+
     public boolean isRunning(String jobId) {
         return running.contains(jobId);
     }
 
+    /** 手动触发（无计划触发时刻，业务日取 params.bizDate 或上海当日的前一日） */
     public void execute(ScheduleJob job) {
+        execute(job, null);
+    }
+
+    /**
+     * 执行任务。
+     *
+     * @param scheduledAt 计划触发时刻（cron 边界，调度器传入）；为空表示手动触发
+     */
+    public void execute(ScheduleJob job, LocalDateTime scheduledAt) {
         if (!running.add(job.getId())) {
             log.info("任务 {} 正在运行，跳过本次触发", job.getJobName());
             return;
         }
         ScheduleJobLog jobLog = new ScheduleJobLog();
         jobLog.setJobId(job.getId());
+        jobLog.setScheduledAt(scheduledAt);
         jobLog.setStatus(0);
         jobLog.setStartTime(LocalDateTime.now());
         try {
@@ -146,7 +167,7 @@ public class JobExecutor {
                 return executeWorkflowJob(job, jobLog);
             }
             case "SYNC" -> {
-                return executeSyncJob(job);
+                return executeSyncJob(job, jobLog);
             }
             // 尚无真实实现的分支：明确失败，避免静默成功
             case "REFRESH", "PUSH" -> throw new BusinessException(
@@ -165,21 +186,52 @@ public class JobExecutor {
         }
         int timeout = timeoutSeconds(job, WorkflowApiClient.DEFAULT_TIMEOUT_SECONDS);
         Map<String, Object> params = parseParams(job.getParams());
-        String runId;
+
+        // 幂等键与业务日期：调度触发按计划触发时刻生成（稳定可重放）；手动触发按 params.bizDate 或上海前一日
+        LocalDateTime scheduledAt = jobLog.getScheduledAt();
+        String bizDate = resolveBizDate(job, jobLog);
+        String requestId;
+        if (scheduledAt != null) {
+            ZonedDateTime plan = scheduledAt.atZone(BIZ_ZONE);
+            requestId = "sched:" + job.getId() + ":" + plan.format(REQUEST_KEY_FMT);
+        } else {
+            requestId = "manual:" + jobLog.getId();
+        }
+
+        RunAcceptDto accept;
         try {
-            runId = workflowApiClient.trigger(wfId, params, "SCHEDULE", job.getId(), jobLog.getId());
-        } catch (RestClientException e) {
+            accept = workflowApiClient.triggerWithRequest(wfId, params, "SCHEDULE",
+                    job.getId(), jobLog.getId(), requestId, bizDate, scheduledAt);
+        } catch (RestClientException | IllegalStateException e) {
             WorkflowRunDto existing = workflowApiClient.findByScheduleLog(wfId, jobLog.getId());
             if (existing == null || StrUtil.isBlank(existing.getId())) {
                 throw new NoRetryException("无法确认工作流是否已受理: scheduleLogId=" + jobLog.getId()
-                        + "，error=" + e.getMessage());
+                        + "，bizDate=" + bizDate + "，error=" + e.getMessage());
             }
-            runId = existing.getId();
             // 若查到的是上一次已结束的失败运行，当前提交结果仍然不确定。
-            if ("FAILED".equals(existing.getRunStatus()) || "STOP".equals(existing.getRunStatus())) {
-                throw new NoRetryException("查询到失败或停止的工作流: runId=" + runId
+            if (WorkflowApiClient.isFinal(existing.getRunStatus())) {
+                throw new NoRetryException("查询到失败或停止的工作流: runId=" + existing.getId()
                         + "，本次提交结果未确认");
             }
+            accept = RunAcceptDto.duplicate(existing.getId(), bizDate);
+        }
+        if (accept == null) {
+            throw new NoRetryException("工作流受理无响应: bizDate=" + bizDate + "，requestId=" + requestId);
+        }
+        if (RunAcceptDto.STATE_REJECTED.equals(accept.getState())) {
+            if ("RUN_ALREADY_ACTIVE".equals(accept.getRejectCode())) {
+                throw new NoRetryException("业务日已有活跃运行: bizDate=" + bizDate
+                        + "，activeRunId=" + accept.getActiveRunId());
+            }
+            if ("REQUEST_CONFLICT".equals(accept.getRejectCode())) {
+                throw new NoRetryException("同键请求参数冲突: requestId=" + requestId);
+            }
+            throw new BusinessException("工作流受理被拒绝: " + accept.getRejectCode()
+                    + ": " + (accept.getRejectMessage() == null ? "-" : accept.getRejectMessage()));
+        }
+        String runId = accept.getRunId();
+        if (StrUtil.isBlank(runId)) {
+            throw new NoRetryException("工作流受理结果缺少 runId: bizDate=" + bizDate);
         }
         log.info("WORKFLOW 任务 {} 已触发工作流 {}，runId={}", job.getJobName(), wfId, runId);
         WorkflowRunDto run;
@@ -187,6 +239,9 @@ public class JobExecutor {
             run = workflowApiClient.waitForRun(runId, timeout);
         } catch (WorkflowApiClient.RunTimeoutException e) {
             throw new NoRetryException("工作流已受理但等待超时: runId=" + runId + "，" + e.getMessage());
+        }
+        if ("RECOVERY_REQUIRED".equals(run.getRunStatus())) {
+            throw new NoRetryException("工作流执行结果需要核查: runId=" + runId);
         }
         if (!"SUCCESS".equals(run.getRunStatus())) {
             throw new BusinessException("工作流运行失败: runId=" + runId
@@ -200,13 +255,15 @@ public class JobExecutor {
     // ==================== SYNC（管道） ====================
 
     /** 触发管道任务并等待实例至终态 */
-    private int executeSyncJob(ScheduleJob job) {
+    private int executeSyncJob(ScheduleJob job, ScheduleJobLog jobLog) {
         String taskId = resolveRef(job, "pipelineTaskId");
         if (StrUtil.isBlank(taskId)) {
             throw new BusinessException("SYNC 任务未配置关联管道任务（refId 或 params.pipelineTaskId）");
         }
+        String bizDate = resolveBizDate(job, jobLog);
         int timeout = timeoutSeconds(job, PipelineApiClient.DEFAULT_TIMEOUT_SECONDS);
-        PipelineApiClient.TriggerResult triggerResult = pipelineApiClient.triggerSafely(taskId, "SCHEDULE", null, null);
+        PipelineApiClient.TriggerResult triggerResult =
+                pipelineApiClient.triggerSafely(taskId, "SCHEDULE", null, null, bizDate);
         PipelineInstanceDto instance = triggerResult.instance();
         if (instance == null || StrUtil.isBlank(instance.getId())) {
             throw new NoRetryException("SYNC 任务触发返回空实例，无法确认是否已受理");
@@ -222,6 +279,9 @@ public class JobExecutor {
         if (finished.getStatus() == null || finished.getStatus() == 0) {
             throw new NoRetryException("管道实例仍未完成: instanceId=" + finished.getId());
         }
+        if (Integer.valueOf(PipelineInstanceDto.COMMIT_UNCONFIRMED).equals(finished.getStatus())) {
+            throw new NoRetryException("管道提交结果待核查: instanceId=" + finished.getId());
+        }
         if (finished.getStatus() != 1) {
             throw new BusinessException("管道执行失败: instanceId=" + finished.getId()
                     + "，error=" + (finished.getErrorMessage() == null ? "-" : finished.getErrorMessage()));
@@ -233,6 +293,22 @@ public class JobExecutor {
 
     // ==================== 工具 ====================
 
+    /**
+     * 业务日期：调度触发按计划触发时刻（上海时区）的前一日，稳定可重放；
+     * 手动触发取 params.bizDate，缺省取上海时区前一日。
+     */
+    private String resolveBizDate(ScheduleJob job, ScheduleJobLog jobLog) {
+        LocalDateTime scheduledAt = jobLog.getScheduledAt();
+        if (scheduledAt != null) {
+            return scheduledAt.atZone(BIZ_ZONE).toLocalDate().minusDays(1).toString();
+        }
+        LocalDate date = parseDate(parseJsonField(job.getParams(), "bizDate"));
+        if (date == null) {
+            date = LocalDate.now(BIZ_ZONE).minusDays(1);
+        }
+        return date.toString();
+    }
+
     /** 解析关联ID：refId 优先，回退 params JSON 中指定字段 */
     private String resolveRef(ScheduleJob job, String paramsKey) {
         if (StrUtil.isNotBlank(job.getRefId())) {
@@ -243,6 +319,18 @@ public class JobExecutor {
 
     private int timeoutSeconds(ScheduleJob job, int defaultSeconds) {
         return job.getTimeout() == null || job.getTimeout() <= 0 ? defaultSeconds : job.getTimeout();
+    }
+
+    /** 严格 YYYY-MM-DD 解析，非法返回 null */
+    private LocalDate parseDate(String text) {
+        if (StrUtil.isBlank(text)) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(text.trim(), DateTimeFormatter.ISO_LOCAL_DATE);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 解析 JSON 字段，空串安全 */

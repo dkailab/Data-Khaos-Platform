@@ -26,6 +26,21 @@ public class DqSnapshotDto implements Serializable {
     /** 任务名称（冗余展示） */
     private String taskName;
 
+    /** 来源工作流运行ID */
+    private String workflowRunId;
+
+    /** 来源工作流节点运行ID */
+    private String workflowNodeRunId;
+
+    /** 业务日期 YYYY-MM-DD */
+    private String bizDate;
+
+    /** 结论 PASS/FAIL/ERROR */
+    private String conclusion;
+
+    /** ERROR 错误码 */
+    private String errorCode;
+
     private String datasourceId;
 
     private String databaseName;

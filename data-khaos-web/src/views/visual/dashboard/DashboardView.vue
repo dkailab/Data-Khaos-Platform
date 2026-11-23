@@ -49,7 +49,14 @@
               :loading="loadingItems[item.id]"
               :theme="theme"
               @drill="onDrill(item, $event)"
-            />
+            >
+              <template #table-cell="{ row, column }">
+                <RouterLink v-if="publicationLink(item, row, column)" :to="publicationLink(item, row, column)!" class="dk-link">
+                  {{ row[column] }}
+                </RouterLink>
+                <template v-else>{{ row[column] }}</template>
+              </template>
+            </ChartRenderer>
             <div v-else class="item-placeholder">
               <el-icon :size="28"><DataAnalysis /></el-icon>
               <span>数据加载中...</span>
@@ -77,7 +84,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, DataAnalysis, Download, Edit, FullScreen, Moon, Refresh, Sunny } from '@element-plus/icons-vue'
 import ChartRenderer from '@/components/chart/ChartRenderer.vue'
@@ -146,6 +153,33 @@ function getItemStyle(item: VisualDashboardItem) {
   }
 }
 
+const publicationLinks = computed(() => {
+  const links = new Map<string, { publicationAssetId?: string; runEvidenceColumn?: string }>()
+  for (const item of items.value) {
+    if (!item.id || !item.config) continue
+    try {
+      const config = JSON.parse(item.config)
+      if (typeof config?.publicationAssetId === 'string') links.set(item.id, config)
+    } catch {
+      // Older items may contain non-JSON configuration.
+    }
+  }
+  return links
+})
+
+function publicationLink(item: VisualDashboardItem, row: Record<string, unknown>, column: string): RouteLocationRaw | undefined {
+  const config = publicationLinks.value.get(item.id || '')
+  if (!config?.publicationAssetId) return
+  const date = row.stat_date || row.biz_date
+  const id = config.runEvidenceColumn === column ? row[column] : undefined
+  if ((!id && column !== 'stat_date') || typeof date !== 'string') return
+  return {
+    name: 'AssetDetail',
+    params: { tableId: config.publicationAssetId },
+    query: { tab: 'publication', bizDate: date, runId: typeof id === 'string' ? id : undefined },
+  }
+}
+
 function getDefaultTitle(type?: string) {
   const map: Record<string, string> = {
     BAR: '柱状图', LINE: '折线图', PIE: '饼图', AREA: '面积图', SCATTER: '散点图',
@@ -159,7 +193,9 @@ async function loadAll() {
   loading.value = true
   try {
     dashboard.value = await getDashboard(dashboardId.value)
-    boards.value = ((await listBoards(dashboardId.value)) as unknown as DashboardBoard[]) || []
+    boards.value = (await listBoards(dashboardId.value) || []).flatMap(board =>
+      board.id ? [{ ...board, id: board.id, name: board.boardName || '分析板' }] : [],
+    )
     if (boards.value.length) {
       activeBoardId.value = boards.value[0].id
       // 解析画布配置

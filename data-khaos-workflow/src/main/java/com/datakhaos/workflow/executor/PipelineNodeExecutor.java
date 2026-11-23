@@ -49,7 +49,7 @@ public class PipelineNodeExecutor implements NodeExecutor {
         long start = System.currentTimeMillis();
         // 触发（带幂等保护）
         PipelineApiClient.TriggerResult triggerResult = pipelineApiClient.triggerSafely(
-                taskId, "WORKFLOW", context.getRunId(), context.getNodeRunId());
+                taskId, "WORKFLOW", context.getRunId(), context.getNodeRunId(), context.getBizDate());
         PipelineInstanceDto instance = triggerResult.instance();
         if (instance == null || StrUtil.isBlank(instance.getId())) {
             throw new PipelineApiClient.SubmissionUnconfirmedException("管道触发返回空实例", null);
@@ -74,6 +74,10 @@ public class PipelineNodeExecutor implements NodeExecutor {
         long cost = System.currentTimeMillis() - start;
         if (finished.getStatus() == null || finished.getStatus() == 0) {
             throw new IllegalStateException("管道实例仍未完成（status=0）");
+        }
+        if (Integer.valueOf(PipelineInstanceDto.COMMIT_UNCONFIRMED).equals(finished.getStatus())) {
+            throw new PipelineApiClient.SubmissionUnconfirmedException(
+                    "管道提交结果待核查: instanceId=" + finished.getId(), null);
         }
         if (finished.getStatus() != 1) {
             String msg = StrUtil.isBlank(finished.getErrorMessage()) ? "无错误详情" : finished.getErrorMessage();

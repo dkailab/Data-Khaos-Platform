@@ -63,6 +63,21 @@ services:
       - ../db/mysql-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ../db/migrate-workflow.sql:/docker-entrypoint-initdb.d/02-workflow.sql:ro
       - ../db/migrate-paas-pr1.sql:/docker-entrypoint-initdb.d/03-paas-pr1.sql:ro
+      - ../db/migrate-paas-pr2a.sql:/docker-entrypoint-initdb.d/03z-paas-pr2a.sql:ro
+      - ../db/migrate-workflow-backfill-batch.sql:/docker-entrypoint-initdb.d/03zz-backfill-batch.sql:ro
+      - ../db/migrate-paas-pr2b.sql:/docker-entrypoint-initdb.d/04-paas-pr2b.sql:ro
+      - ../db/migrate-paas-pr2c.sql:/docker-entrypoint-initdb.d/05-paas-pr2c.sql:ro
+      - ../db/migrate-pipeline-publication.sql:/docker-entrypoint-initdb.d/05z-pipeline-publication.sql:ro
+      - ../db/migrate-paas-pr3.sql:/docker-entrypoint-initdb.d/06-paas-pr3.sql:ro
+      - ../db/migrate-query-jobs.sql:/docker-entrypoint-initdb.d/20-query-jobs.sql:ro
+      - ../db/migrate-platform-monitor.sql:/docker-entrypoint-initdb.d/21-platform-monitor.sql:ro
+      - ../db/migrate-project-workspace-activity.sql:/docker-entrypoint-initdb.d/22-project-workspace-activity.sql:ro
+      - ../db/migrate-project-workspace-pipeline-run.sql:/docker-entrypoint-initdb.d/23-project-workspace-pipeline-run.sql:ro
+      - ../db/migrate-workflow-recovery.sql:/docker-entrypoint-initdb.d/24-workflow-recovery.sql:ro
+      - ../db/migrate-workflow-revisions.sql:/docker-entrypoint-initdb.d/25-workflow-revisions.sql:ro
+      - ../db/migrate-materialization-publication.sql:/docker-entrypoint-initdb.d/26-materialization-publication.sql:ro
+      - ../db/migrate-flink-studio.sql:/docker-entrypoint-initdb.d/27-flink-studio.sql:ro
+      - ../db/migrate-flink-deployment.sql:/docker-entrypoint-initdb.d/28-flink-deployment.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
@@ -199,8 +214,7 @@ services:
       args:
         MODULE: data-khaos-query
     container_name: dk-query
-    ports:
-      - "8087:8087"
+    # 查询接口通过网关访问，用户身份由网关透传。
 
   # ---------- 可视化引擎 ----------
   visual:
@@ -235,8 +249,7 @@ services:
       args:
         MODULE: data-khaos-notification
     container_name: dk-notification
-    ports:
-      - "8090:8090"
+    # 通知客户端通过网关访问。服务间通知使用容器网络。
 
   # ---------- 数据质量 ----------
   dquality:
@@ -256,6 +269,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      target: pipeline_stage
       args:
         MODULE: data-khaos-pipeline
     container_name: dk-pipeline
@@ -271,8 +285,16 @@ services:
       args:
         MODULE: data-khaos-workflow
     container_name: dk-workflow
+    environment:
+      <<: *app-env
+      DATA_KHAOS_WORKFLOW_RECOVERY_ENABLED: ${WORKFLOW_RECOVERY_ENABLED:-true}
+      DATA_KHAOS_WORKFLOW_RECOVERY_TIMEOUT_SECONDS: ${WORKFLOW_RECOVERY_TIMEOUT_SECONDS:-300}
+      FLINK_RUN_PROJECT_ID: ${FLINK_RUN_PROJECT_ID:-}
+      FLINK_RUN_SQL_GATEWAY: ${FLINK_RUN_SQL_GATEWAY:-}
+      FLINK_RUN_JOBMANAGER: ${FLINK_RUN_JOBMANAGER:-}
     ports:
-      - "8093:8093"
+      # 本地验收可用，远程请求走网关，内部调用用容器网络。
+      - "127.0.0.1:8093:8093"
 
   # ---------- HDFS（复用 apache/hive 镜像内的 Hadoop 3.3.6，arm64 原生） ----------
   # 单节点 HDFS：namenode + datanode。供 Hive warehouse 与 DataX hdfsreader/hdfswriter 使用。

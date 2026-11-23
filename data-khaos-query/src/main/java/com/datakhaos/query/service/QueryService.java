@@ -50,7 +50,13 @@ public class QueryService {
     private final QueryProperties properties;
 
     /** 执行查询 */
-    public QueryResult execute(QueryExecuteRequest request, String userId) {
+    public QueryResult execute(QueryExecuteRequest request) {
+        return execute(request, datasourceApiClient, permissionApiClient);
+    }
+
+    QueryResult execute(QueryExecuteRequest request, DatasourceApiClient datasource,
+                        PermissionApiClient permissions) {
+        String userId = requireUserId();
         if (StrUtil.isBlank(request.getDatasourceId())) {
             throw new BusinessException("数据源ID不能为空");
         }
@@ -58,16 +64,16 @@ public class QueryService {
         String sql = SqlAuditUtil.audit(request.getSql());
 
         // 2. 行/列权限 SQL 改写
-        sql = applyPermissionRewrite(sql, userId);
+        sql = applyPermissionRewrite(sql, userId, permissions);
 
         // 3. 可选表权限校验
         if (properties.isPermissionCheckEnabled() && StrUtil.isNotBlank(userId) && !MetadataHolder.isSuperAdmin()) {
-            checkTablePermission(request, sql, userId);
+            checkTablePermission(request, sql, userId, permissions);
         }
 
         // 4. 调用数据源服务执行（服务端二次审核）
         long start = System.currentTimeMillis();
-        R<QueryResult> result = datasourceApiClient.executeRaw(request.getDatasourceId(), sql);
+        R<QueryResult> result = datasource.executeRaw(request.getDatasourceId(), sql);
         long cost = System.currentTimeMillis() - start;
         if (result == null || result.getCode() != 0) {
             String error = result == null ? "查询失败" : result.getMsg();
@@ -84,13 +90,13 @@ public class QueryService {
      * 提取 SQL 中涉及的所有表名，查询行/列权限策略并改写 SQL。
      * 超级管理员或未配置策略时直接返回原 SQL。
      */
-    private String applyPermissionRewrite(String sql, String userId) {
+    private String applyPermissionRewrite(String sql, String userId, PermissionApiClient permissions) {
         if (StrUtil.isBlank(sql)) return sql;
         if (StrUtil.isBlank(userId) || MetadataHolder.isSuperAdmin()) return sql;
 
         try {
             // 获取用户权限上下文
-            UserPermissionDto userPerm = permissionApiClient.getUserPermission(userId);
+            UserPermissionDto userPerm = permissions.getUserPermission(userId);
             if (isNoPoliciesAvailable(userPerm)) return sql;
 
             // 提取 SQL 中涉及的表名
@@ -101,8 +107,8 @@ public class QueryService {
             List<RowPolicy> rowPolicies = new ArrayList<>();
             List<ColumnPolicy> columnPolicies = new ArrayList<>();
             for (String table : tables) {
-                rowPolicies.addAll(permissionApiClient.getRowPolicies(userId, userPerm, table));
-                columnPolicies.addAll(permissionApiClient.getColumnPolicies(userId, userPerm, table));
+                rowPolicies.addAll(permissions.getRowPolicies(userId, userPerm, table));
+                columnPolicies.addAll(permissions.getColumnPolicies(userId, userPerm, table));
             }
 
             if (rowPolicies.isEmpty() && columnPolicies.isEmpty()) return sql;
@@ -142,26 +148,39 @@ public class QueryService {
     }
 
     /** 查询历史（分页） */
-    public PageResult<QueryHistory> history(long current, long size, String userId) {
+    public PageResult<QueryHistory> history(long current, long size) {
+        String userId = requireUserId();
         Page<QueryHistory> page = historyMapper.selectPage(new Page<>(current, size),
                 new LambdaQueryWrapper<QueryHistory>()
-                        .eq(StrUtil.isNotBlank(userId), QueryHistory::getUserId, userId)
+                        .eq(QueryHistory::getUserId, userId)
                         .orderByDesc(QueryHistory::getCreateTime));
         return PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), page.getRecords());
     }
 
     public QueryHistory historyDetail(String id) {
-        QueryHistory history = historyMapper.selectById(id);
+        String userId = requireUserId();
+        QueryHistory history = historyMapper.selectOne(new LambdaQueryWrapper<QueryHistory>()
+                .eq(QueryHistory::getId, id)
+                .eq(QueryHistory::getUserId, userId));
         if (history == null) {
             throw new BusinessException(ResultCode.NOT_FOUND, "查询历史不存在: " + id);
         }
         return history;
     }
 
+    private String requireUserId() {
+        String userId = MetadataHolder.getUserId();
+        if (StrUtil.isBlank(userId)) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        return userId;
+    }
+
     // ---------- 私有方法 ----------
 
     /** 表权限校验：仅当能从 SQL 中识别出简单 FROM 表时执行 */
-    private void checkTablePermission(QueryExecuteRequest request, String sql, String userId) {
+    private void checkTablePermission(QueryExecuteRequest request, String sql, String userId,
+                                      PermissionApiClient permissions) {
         Pattern fromPattern = Pattern.compile(
                 "\\bFROM\\s+([a-zA-Z_][\\w$]*(?:\\.[a-zA-Z_][\\w$]*)*)",
                 Pattern.CASE_INSENSITIVE);
@@ -170,7 +189,7 @@ public class QueryService {
             return;
         }
         String table = matcher.group(1);
-        boolean allowed = permissionApiClient.checkTablePermission(
+        boolean allowed = permissions.checkTablePermission(
                 userId, request.getDatasourceId(), request.getDatabaseName(), table, "SELECT");
         if (!allowed) {
             throw new BusinessException("没有对表 " + table + " 的查询权限");

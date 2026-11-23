@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
@@ -24,13 +25,23 @@ public class PipelineInstance implements Serializable {
 
     private String taskId;
 
+    /** 受理时的项目归属。存量实例可为空。 */
+    private String projectGroupId;
+
+    @JsonIgnore
+    private String workspaceUserId;
+    @JsonIgnore
+    private String workspaceRequestId;
+    @JsonIgnore
+    private String workspaceActiveKey;
+
     /** 执行引擎 */
     private String engine;
 
     /** MANUAL/CRON */
     private String triggerType;
 
-    /** 0=运行中 1=成功 2=失败 */
+    /** 0=运行中 1=成功 2=失败 3=提交待核查 */
     private Integer status;
 
     private LocalDateTime startTime;
@@ -52,6 +63,20 @@ public class PipelineInstance implements Serializable {
 
     /** 关联工作流节点运行ID（WORKFLOW 触发时写入） */
     private String workflowNodeRunId;
+
+    /** 业务日期 YYYY-MM-DD（按日重算任务写入） */
+    private String bizDate;
+
+    /** 实际写入的目标表（运行证据） */
+    private String targetTable;
+    private String targetDatasourceId;
+    private String targetDatabaseName;
+    private LocalDateTime publishedAt;
+
+    private String materializationGeneration;
+
+    /** 实际写入策略（运行证据） */
+    private String writeMode;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;

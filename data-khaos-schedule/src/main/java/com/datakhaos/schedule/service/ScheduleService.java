@@ -108,10 +108,10 @@ public class ScheduleService {
         jobMapper.updateById(job);
     }
 
-    /** 手动触发（异步执行） */
+    /** 手动触发（异步执行；无计划触发时刻，业务日取 params.bizDate 或上海前一日） */
     public void runNow(String id) {
         ScheduleJob job = getJob(id);
-        taskExecutor.execute(() -> jobExecutor.execute(job));
+        taskExecutor.execute(() -> jobExecutor.execute(job, null));
     }
 
     // ---------- 执行日志 ----------

@@ -21,6 +21,9 @@ public class ScheduleJobLog extends BaseEntity {
     /** 0:运行中 1:成功 2:失败 */
     private Integer status;
 
+    /** 计划触发时刻（cron 边界，区别于实际开始时间） */
+    private LocalDateTime scheduledAt;
+
     /** 开始时间 */
     private LocalDateTime startTime;
 

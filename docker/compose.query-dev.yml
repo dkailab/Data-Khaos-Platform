@@ -1,0 +1,9 @@
+services:
+  query:
+    volumes:
+      - type: bind
+        source: ../data-khaos-query/target/data-khaos-query-1.0.0-SNAPSHOT.jar
+        target: /app/app.jar
+        read_only: true
+        bind:
+          create_host_path: false

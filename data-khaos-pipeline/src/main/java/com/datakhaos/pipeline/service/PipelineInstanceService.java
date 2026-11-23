@@ -55,4 +55,23 @@ public class PipelineInstanceService {
                 .eq(PipelineInstance::getWorkflowNodeRunId, workflowNodeRunId)
                 .orderByDesc(PipelineInstance::getStartTime));
     }
+
+    /** 查询指定物理目标的历史实例，或共享发布视图中当前有效的分区。 */
+    public List<PipelineInstance> byTargetTable(String datasourceId, String databaseName, String targetTable,
+                                                 String bizDate, boolean published, int limit) {
+        if (StrUtil.hasBlank(datasourceId, databaseName, targetTable)) {
+            return List.of();
+        }
+        int safeLimit = Math.max(1, Math.min(limit, 100));
+        return mapper.selectList(new LambdaQueryWrapper<PipelineInstance>()
+                .eq(PipelineInstance::getTargetDatasourceId, datasourceId)
+                .eq(PipelineInstance::getTargetDatabaseName, databaseName)
+                .eq(PipelineInstance::getTargetTable, targetTable)
+                .eq(StrUtil.isNotBlank(bizDate), PipelineInstance::getBizDate, bizDate)
+                .inSql(published, PipelineInstance::getId, "SELECT id FROM pipeline_partition_publication")
+                .orderByDesc(published, PipelineInstance::getPublishedAt)
+                .orderByDesc(!published, PipelineInstance::getStartTime)
+                .orderByDesc(PipelineInstance::getId)
+                .last("LIMIT " + safeLimit));
+    }
 }

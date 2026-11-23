@@ -62,6 +62,35 @@ public class SnapshotService {
         return PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), records);
     }
 
+    /**
+     * 内部查询快照（PR3：元数据聚合运行证据）。
+     * 与 {@link #detail(String)} 不同，不做能力/项目组成员校验，调用方需以系统身份透传。
+     * 查不到返回 null，便于调用方区分「无证据」与「查询失败」。
+     */
+    public DqSnapshot getInternal(String id) {
+        if (StrUtil.isBlank(id)) {
+            return null;
+        }
+        return snapshotMapper.selectById(id);
+    }
+
+    /**
+     * 内部查询某张表某个业务日最近一次稽核快照（PR3：数据地图回查质量证据）。
+     *
+     * @param tableName 表名（可空=不限表）
+     * @param bizDate   业务日期（可空=不限日期）
+     * @param conclusion 结论 PASS/FAIL/ERROR（可空=不限结论）
+     */
+    public DqSnapshot latestInternal(String tableName, String bizDate, String conclusion) {
+        return snapshotMapper.selectList(new LambdaQueryWrapper<DqSnapshot>()
+                        .eq(StrUtil.isNotBlank(tableName), DqSnapshot::getTableName, tableName)
+                        .eq(StrUtil.isNotBlank(bizDate), DqSnapshot::getBizDate, bizDate)
+                        .eq(StrUtil.isNotBlank(conclusion), DqSnapshot::getConclusion, conclusion)
+                        .orderByDesc(DqSnapshot::getCreateTime)
+                        .last("LIMIT 1"))
+                .stream().findFirst().orElse(null);
+    }
+
     public Map<String, Object> detail(String id) {
         AuthContext ctx = auth.current();
         auth.requireCap(ctx, PermissionConstants.CAP_QUALITY_BROWSE);

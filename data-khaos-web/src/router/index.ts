@@ -33,6 +33,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/assets/AssetDetail.vue'),
         meta: { title: '资产详情' },
       },
+      {
+        path: 'project-workspace',
+        name: 'ProjectWorkspace',
+        component: () => import('@/views/workspace/ProjectWorkspace.vue'),
+        meta: { title: '项目空间' },
+      },
       // 系统管理
       {
         path: 'system/user',
@@ -270,6 +276,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/schedule/job/JobList.vue'),
         meta: { title: '调度任务' },
       },
+      {
+        path: 'workflow/flink',
+        name: 'FlinkStudio',
+        component: () => import('@/views/workflow/flink/FlinkStudio.vue'),
+        meta: { title: 'Flink 开发' },
+      },
       // 工作流编排
       {
         path: 'workflow/list',
@@ -288,6 +300,12 @@ const routes: RouteRecordRaw[] = [
         name: 'WorkflowEdit',
         component: () => import('@/views/workflow/edit/WorkflowEdit.vue'),
         meta: { title: '编排工作流' },
+      },
+      {
+        path: 'ops/monitor',
+        name: 'PlatformMonitor',
+        component: () => import('@/views/ops/PlatformMonitor.vue'),
+        meta: { title: '平台监控告警' },
       },
       // 通知中心
       {

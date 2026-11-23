@@ -35,6 +35,9 @@ public class WorkflowDef extends WorkflowBaseEntity {
     /** 负责人 */
     private String owner;
 
+    /** 所属项目ID（空表示不校验项目范围，兼容旧数据） */
+    private String projectId;
+
     /** 运行参数模板（JSON，供节点 ${param} 替换） */
     private String params;
 }

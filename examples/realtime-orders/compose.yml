@@ -1,0 +1,78 @@
+x-flink: &flink
+  image: flink:1.20.3-scala_2.12-java17
+  environment:
+    TZ: UTC
+    FLINK_PROPERTIES: |
+      jobmanager.rpc.address: jobmanager
+      rest.address: jobmanager
+      taskmanager.numberOfTaskSlots: 4
+      parallelism.default: 1
+      execution.checkpointing.interval: 2 s
+      execution.checkpointing.timeout: 45 s
+      execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+      state.checkpoints.dir: file:///state/checkpoints
+      state.savepoints.dir: file:///state/savepoints
+      restart-strategy.type: fixed-delay
+      restart-strategy.fixed-delay.attempts: 45
+      restart-strategy.fixed-delay.delay: 2 s
+      heartbeat.timeout: 12000
+      heartbeat.interval: 2000
+  volumes:
+    - ./orders-cdc.yaml:/lab/orders-cdc.yaml:ro
+    - ./window-events.csv:/lab/window-events.csv:ro
+    - ${DK_CDC_CACHE:?Run prepare.sh and set DK_CDC_CACHE}/cdc:/cdc
+    - ${DK_CDC_CACHE}/sql/kafka.jar:/opt/flink/lib/lab-kafka.jar:ro
+    - ${DK_CDC_CACHE}/sql/jdbc.jar:/opt/flink/lib/lab-jdbc.jar:ro
+    - ${DK_CDC_CACHE}/sql/mysql.jar:/opt/flink/lib/lab-mysql.jar:ro
+    - flink-state:/state
+  depends_on:
+    state-init:
+      condition: service_completed_successfully
+
+services:
+  mysql:
+    image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+    command: ["--server-id=7100", "--log-bin=orders-bin", "--binlog-format=ROW", "--binlog-row-image=FULL", "--default-time-zone=+00:00"]
+    environment:
+      MYSQL_ROOT_PASSWORD: local-orders-root
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/10-orders.sql:ro
+      - mysql-data:/var/lib/mysql
+
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 3
+
+  state-init:
+    image: flink:1.20.3-scala_2.12-java17
+    user: "0"
+    entrypoint: ["sh", "-ec", "mkdir -p /state/checkpoints /state/savepoints && chown -R flink:flink /state"]
+    volumes:
+      - flink-state:/state
+
+  jobmanager:
+    <<: *flink
+    command: jobmanager
+    ports:
+      - "127.0.0.1::8081"
+
+  taskmanager:
+    <<: *flink
+    command: taskmanager
+
+volumes:
+  mysql-data:
+  flink-state:

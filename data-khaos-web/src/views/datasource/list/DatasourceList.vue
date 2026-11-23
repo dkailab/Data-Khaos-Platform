@@ -67,8 +67,14 @@
         <el-form-item label="端口" prop="port">
           <el-input-number v-model="form.port" :min="1" :max="65535" />
         </el-form-item>
-        <el-form-item label="数据库" prop="databaseName">
-          <el-input v-model="form.databaseName" placeholder="请输入默认数据库" />
+        <el-form-item :label="form.dsType === 'DM8' ? '目标模式' : '数据库'" prop="databaseName">
+          <el-input v-model="form.databaseName" :placeholder="form.dsType === 'DM8' ? '留空使用登录用户的默认模式' : '请输入默认数据库'" />
+        </el-form-item>
+        <el-form-item v-if="form.dsType === 'HIVE'" label="Hive 认证">
+          <el-select v-model="hiveAuth" style="width:100%">
+            <el-option label="默认（NONE）" value="NONE" />
+            <el-option label="NOSASL" value="NOSASL" />
+          </el-select>
         </el-form-item>
         <el-form-item label="用户名" prop="username">
           <el-input v-model="form.username" placeholder="请输入用户名" />
@@ -95,7 +101,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
@@ -129,6 +135,17 @@ const dialogVisible = ref(false)
 const formRef = ref<FormInstance>()
 const isEdit = ref(false)
 const form = reactive<MetaDatasource>({ status: 1, dsType: 'MYSQL', port: 3306 })
+function datasourceProperties(): Record<string, unknown> {
+  try {
+    return JSON.parse(form.properties || '{}') || {}
+  } catch {
+    return {}
+  }
+}
+const hiveAuth = computed({
+  get: () => datasourceProperties().hiveAuth === 'NOSASL' ? 'NOSASL' : 'NONE',
+  set: value => { form.properties = JSON.stringify({ ...datasourceProperties(), hiveAuth: value }) },
+})
 const formRules: FormRules = {
   dsName: [{ required: true, message: '请输入数据源名称', trigger: 'blur' }],
   dsType: [{ required: true, message: '请选择类型', trigger: 'change' }],
@@ -159,13 +176,13 @@ function handleReset() {
 
 function openCreate() {
   isEdit.value = false
-  Object.assign(form, { dsName: '', dsType: 'MYSQL', host: '', port: 3306, databaseName: '', username: '', password: '', status: 1 })
+  Object.assign(form, { dsName: '', dsType: 'MYSQL', host: '', port: 3306, databaseName: '', username: '', password: '', properties: undefined, status: 1 })
   dialogVisible.value = true
 }
 
 function openEdit(row: MetaDatasource) {
   isEdit.value = true
-  Object.assign(form, { ...row, password: undefined })
+  Object.assign(form, { properties: undefined, ...row, password: undefined })
   dialogVisible.value = true
 }
 

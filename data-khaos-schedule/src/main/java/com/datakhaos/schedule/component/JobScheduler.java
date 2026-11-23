@@ -52,8 +52,9 @@ public class JobScheduler {
                 LocalDateTime base = lastRun.computeIfAbsent(job.getId(), this::lastStartTime);
                 LocalDateTime next = expression.next(base);
                 if (next != null && !LocalDateTime.now().isBefore(next)) {
-                    log.info("触发任务 {} (cron={})", job.getJobName(), job.getCronExpression());
-                    taskExecutor.execute(() -> jobExecutor.execute(job));
+                    log.info("触发任务 {} (cron={})，计划触发时刻 {}", job.getJobName(), job.getCronExpression(), next);
+                    // 传入计划触发时刻：业务日期按其在上海时区的前一日计算，幂等键稳定可重放
+                    taskExecutor.execute(() -> jobExecutor.execute(job, next));
                     lastRun.put(job.getId(), LocalDateTime.now());
                 }
             } catch (Exception e) {

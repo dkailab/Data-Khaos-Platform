@@ -53,11 +53,13 @@ export const CATEGORIES: CategoryDef[] = [
     title: '数据开发',
     icon: 'EditPen',
     features: [
+      { key: 'dev_project_workspace', title: '项目空间', path: '/project-workspace', icon: 'Folder' },
       { key: 'dev_sql', title: 'SQL 开发编辑器', path: '/query/query', mandatory: true, icon: 'EditPen' },
       { key: 'dev_schedule', title: '任务调度管理', path: '/schedule/job' },
       { key: 'dev_cron', title: '定时任务配置', path: '/schedule/job' },
       { key: 'dev_script', title: '数据脚本管理' },
       { key: 'dev_onesql', title: 'OneSQL 工作台', path: '/query/onesql' },
+      { key: 'dev_flink', title: 'Flink 开发', path: '/workflow/flink', icon: 'Cpu' },
       { key: 'dev_workflow', title: '工作流编排', path: '/workflow/list', icon: 'Share' },
       { key: 'dev_monitor', title: '任务监控' },
       { key: 'dev_version', title: '脚本版本管理' },
@@ -117,7 +119,7 @@ export const CATEGORIES: CategoryDef[] = [
     icon: 'Monitor',
     features: [
       { key: 'ops_monitor', title: '任务运行监控', icon: 'Monitor' },
-      { key: 'ops_alert', title: '数据告警中心', path: '/notification/send' },
+      { key: 'ops_alert', title: '平台监控告警', path: '/ops/monitor', icon: 'Bell' },
       { key: 'ops_log', title: '日志查询' },
       { key: 'ops_resource', title: '系统资源监控' },
       { key: 'ops_perm', title: '权限管理', path: '/permission/table' },

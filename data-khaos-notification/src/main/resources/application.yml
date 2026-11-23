@@ -34,6 +34,9 @@ mybatis-plus:
 
 data-khaos:
   version: 1.0.0
+  monitor:
+    enabled: ${PLATFORM_MONITOR_ENABLED:true}
+    jwt-secret: ${JWT_SECRET:data-khaos-jwt-secret-key-2026-hs256-0123456789}
 
 knife4j:
   enable: true

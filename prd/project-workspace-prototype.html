@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Khaos · 项目空间交互原型</title>
+<style>
+  :root {
+    color-scheme: light;
+    --canvas:#f3f6fc; --surface:#fff; --ink:#1e293b; --muted:#52627a; --border:#d9e2f0;
+    --soft:#edf2f9; --blue:#215dba; --blue-soft:#e7f0ff; --sidebar:#f9fbff;
+    --green:#14724f; --green-soft:#e7f6ee; --red:#ab3741; --red-soft:#fcecef;
+    --amber:#855810; --amber-soft:#fff3d7; --mono:ui-monospace,Consolas,monospace;
+  }
+  * { box-sizing:border-box }
+  body { margin:0; color:var(--ink); background:var(--canvas); font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif }
+  button,input,select,textarea { font:inherit; color:inherit }
+  button { cursor:pointer }
+  button:disabled { cursor:not-allowed; opacity:.55 }
+  :focus-visible { outline:2px solid #2a6bd3; outline-offset:3px }
+  h1,h2,p { margin:0 }
+  h1 { font-size:clamp(27px,4vw,36px); font-weight:680; letter-spacing:-.035em }
+  h2 { font-size:17px; font-weight:650 }
+  small,.muted { color:var(--muted) }
+  .mono { font-family:var(--mono); font-size:12px; overflow-wrap:anywhere }
+  .top { position:sticky; top:0; z-index:5; min-height:64px; display:flex; align-items:center; gap:16px; padding:10px 24px; background:var(--surface); border-bottom:1px solid var(--border) }
+  .wordmark { display:flex; align-items:center; gap:10px; white-space:nowrap; font-size:17px; font-weight:750; letter-spacing:-.02em }
+  .brand-icon { width:34px; height:34px; display:grid; place-content:center; grid-template-columns:repeat(3,4px); gap:2px; border-radius:9px; background:var(--blue); box-shadow:0 2px 6px #215dba35 }
+  .brand-icon i { width:4px; height:4px; background:#fff; border-radius:.7px }
+  .vline { width:1px; height:26px; background:var(--border) }
+  .top-right { display:flex; align-items:center; gap:12px; margin-left:auto }
+  .avatar { display:grid; place-items:center; flex:none; width:32px; height:32px; border-radius:50%; color:#234f90; background:var(--blue-soft); font-weight:650 }
+  .field,.button { min-height:36px; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:6px 11px }
+  .field:disabled { opacity:.7 }
+  .button { display:inline-flex; align-items:center; justify-content:center; gap:7px; white-space:nowrap; font-weight:580 }
+  .button:not(:disabled):hover { background:var(--soft) }
+  .primary { background:var(--blue); border-color:var(--blue); color:#fff }
+  .primary:not(:disabled):hover { background:#174a95 }
+  .quiet { background:transparent; border-color:transparent; color:var(--blue) }
+  .danger { background:var(--red); border-color:var(--red); color:#fff }
+  .danger:not(:disabled):hover { background:#91303a }
+  .chevron { width:7px; height:7px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg); margin:0 1px 4px 4px }
+  .project-control { position:relative }
+  .project-trigger { background:var(--blue-soft); color:#244e89; border-color:#c9dbf4 }
+  .project-popover { position:absolute; z-index:8; top:calc(100% + 8px); left:0; width:min(340px,calc(100vw - 32px)); padding:8px; background:#fff; border:1px solid var(--border); border-radius:10px; box-shadow:0 16px 40px #16386722 }
+  .project-popover[hidden] { display:none }
+  .popover-title { margin:5px 8px 8px; font-size:12px; color:var(--muted) }
+  .project-option { width:100%; display:grid; grid-template-columns:35px minmax(0,1fr) auto; gap:10px; text-align:left; align-items:center; padding:10px; border:0; border-radius:8px; background:none }
+  .project-option:hover,.project-option.current { background:var(--blue-soft) }
+  .project-option strong,.project-option small { display:block }
+  .initial { width:34px; height:34px; display:grid; place-items:center; border:1px solid #d6e3f6; border-radius:8px; background:#f5f8fe; color:#254f87; font-weight:700 }
+  .shell { display:grid; grid-template-columns:216px minmax(0,1fr); min-height:calc(100vh - 64px) }
+  .side { padding:24px 14px; background:var(--sidebar); border-right:1px solid var(--border); display:flex; flex-direction:column; gap:18px }
+  .side-head { display:flex; justify-content:space-between; align-items:center; padding:0 8px; font-size:13px; font-weight:680 }
+  .nav-list { display:grid; gap:4px }
+  .nav-list button { display:flex; align-items:center; gap:9px; padding:9px 10px; text-align:left; background:none; border:0; border-radius:8px; color:var(--muted) }
+  .nav-list button:hover { background:var(--soft) }
+  .nav-list button[aria-current="page"] { color:var(--blue); background:var(--blue-soft); font-weight:650 }
+  .nav-icon { width:16px; text-align:center; font-family:var(--mono); opacity:.9 }
+  main { width:100%; min-width:0; max-width:1510px; margin:0 auto; padding:25px 30px 38px }
+  .bread { display:flex; gap:9px; align-items:center; margin-bottom:12px; color:var(--muted); font-size:12px }
+  .page-head,.panel-head,.panel-tools,.inline-actions,.dialog-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap }
+  .page-head,.panel-head { justify-content:space-between }
+  .page-head { align-items:flex-end; margin:0 0 17px }
+  .page-head p,.panel-head p { color:var(--muted); margin-top:4px }
+  .intro { border:1px solid #cfdef2; border-radius:10px; background:linear-gradient(110deg,#fafdff 15%,#eaf2ff); padding:16px 18px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap }
+  .project-summary { display:flex; gap:12px; align-items:center }
+  .project-summary .initial { width:42px; height:42px; font-size:17px }
+  .summary-id { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:3px }
+  .summary-id .mono { color:var(--muted) }
+  .pill,.status { display:inline-flex; gap:6px; align-items:center; padding:3px 8px; border-radius:6px; font-weight:600; font-size:12px; background:var(--soft); color:#43536e; white-space:nowrap }
+  .pill.blue,.status.running { background:var(--blue-soft); color:var(--blue) }
+  .status.success { background:var(--green-soft); color:var(--green) }
+  .status.failed { background:var(--red-soft); color:var(--red) }
+  .status i { width:6px; height:6px; border-radius:50%; background:currentColor }
+  .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-bottom:16px }
+  .metric,.panel { background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:0 1px 2px #1d33560d }
+  .metric { padding:14px 16px }
+  .metric span { display:block; color:var(--muted); font-size:12px }
+  .metric strong { display:block; font-size:25px; font-variant-numeric:tabular-nums; line-height:1.3; margin-top:3px }
+  .panel { overflow:hidden; min-width:0 }
+  .panel-head { padding:16px 18px; align-items:flex-start }
+  .panel-tools { padding:0 18px 14px }
+  .panel-tools input { width:min(255px,100%); min-width:0 }
+  .table-wrap { overflow:auto; width:100% }
+  table { width:100%; min-width:620px; text-align:left; border-collapse:collapse; font-size:13px }
+  th,td { padding:11px 14px; border-top:1px solid #e8edf5; vertical-align:middle }
+  th:first-child,td:first-child { padding-left:18px }
+  th { background:#f8faff; color:#465875; font-size:12px; font-weight:600; white-space:nowrap }
+  td small { display:block }
+  tr:hover td { background:#fbfdff }
+  .table-bottom { padding:10px 18px; border-top:1px solid #e8edf5; color:var(--muted); font-size:12px }
+  .notice { padding:11px 14px; background:var(--amber-soft); color:var(--amber); border:1px solid #f3dfad; border-radius:8px; margin-bottom:14px }
+  .notice.error { background:var(--red-soft); color:var(--red); border-color:#efd1d6 }
+  .empty { text-align:center; padding:46px 16px; display:grid; justify-items:center; gap:10px }
+  .empty-icon { width:42px; height:42px; display:grid; place-items:center; font-size:20px; color:var(--blue); border-radius:10px; background:var(--blue-soft) }
+  .editor { padding:18px; display:grid; gap:13px }
+  .editor label { display:grid; gap:5px }
+  .editor textarea { resize:vertical; min-height:110px; width:100% }
+  .editor-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px }
+  .dialog-actions { justify-content:flex-end; margin-top:18px }
+  dialog { max-width:calc(100vw - 24px); border:1px solid var(--border); border-radius:12px; padding:20px; color:var(--ink); box-shadow:0 25px 80px #1b376243 }
+  dialog::backdrop { background:#192d4b52 }
+  .confirm { width:440px }
+  .confirm p { margin-top:8px }
+  .drawer { inset:0 0 0 auto; margin:0; max-height:100dvh; max-width:min(100vw,500px); height:100dvh; width:500px; border-radius:0; overflow:auto }
+  .drawer header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px }
+  dl { display:grid; grid-template-columns:110px minmax(0,1fr); padding:12px; gap:9px; border:1px solid var(--border); border-radius:8px }
+  dt { color:var(--muted) }
+  dd { margin:0; overflow-wrap:anywhere }
+  .toast { position:fixed; right:18px; bottom:18px; z-index:10; max-width:calc(100vw - 36px); padding:10px 14px; background:var(--ink); color:#fff; border-radius:8px; box-shadow:0 8px 30px #17243d33 }
+  .toast:empty { display:none }
+  @media(max-width:850px) {
+    .shell { grid-template-columns:170px minmax(0,1fr) }
+    main { padding:20px 18px }
+    .top { padding:10px 14px; gap:10px }
+    .top-right { gap:8px }
+    .avatar { display:none }
+  }
+  @media(max-width:640px) {
+    .top { flex-wrap:wrap }
+    .wordmark { flex:1; font-size:15px }
+    .vline { display:none }
+    .top-right { width:100%; margin:0; justify-content:flex-end }
+    .project-popover { left:auto; right:0 }
+    .shell { display:block }
+    .side { display:block; padding:5px 12px; border-right:0; border-bottom:1px solid var(--border) }
+    .side-head { display:none }
+    .nav-list { display:flex; gap:3px; overflow:auto }
+    .nav-list button { white-space:nowrap; flex:none }
+    main { padding:15px 12px 22px }
+    .editor-fields { grid-template-columns:1fr }
+    .metric { padding:10px }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wordmark"><span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>Data Khaos</div>
+  <div class="vline" aria-hidden="true"></div>
+  <div class="project-control" id="project-control">
+    <button type="button" id="project-trigger" class="button project-trigger" aria-expanded="false" aria-controls="project-list"><span id="project-label">选择项目</span><span class="chevron" aria-hidden="true"></span></button>
+    <div class="project-popover" id="project-list" hidden></div>
+  </div>
+  <div class="top-right">
+    <label for="scenario" class="muted">原型场景</label>
+    <select class="field" id="scenario">
+      <option value="normal">双项目成员</option>
+      <option value="leader">零售组长</option>
+      <option value="empty">当前项目无任务</option>
+      <option value="revoked">当前项目权限收回</option>
+      <option value="none">没有可访问项目</option>
+      <option value="unavailable">权限服务不可用</option>
+    </select>
+    <span class="avatar" aria-label="演示账号 李四">李</span>
+  </div>
+</header>
+<div class="shell">
+  <aside class="side">
+    <div class="side-head"><span>数据开发</span></div>
+    <nav id="navigation" class="nav-list" aria-label="数据开发菜单"></nav>
+  </aside>
+  <main id="screen" aria-label="项目空间内容"></main>
+</div>
+<dialog id="confirm-dialog" class="confirm" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h2 id="confirm-title">尚有未保存的修改</h2>
+    <p class="muted" id="confirm-message"></p>
+    <div class="dialog-actions">
+      <button class="button" value="stay" autofocus>继续编辑</button>
+      <button class="button danger" value="discard">放弃修改并继续</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="details" class="drawer" aria-labelledby="details-title">
+  <header><h2 id="details-title">运行详情</h2><form method="dialog"><button class="button" aria-label="关闭运行详情">关闭</button></form></header>
+  <div id="details-body"></div>
+</dialog>
+<div class="toast" id="notice" role="status"></div>
+<script>
+'use strict';
+const fixtures = {
+  retail: {
+    name: '零售数仓', id: 'pg_001', initial: '零', role: '开发者', primary: true,
+    sources: ['订单 MySQL', '零售 Hive'],
+    tasks: [
+      { id: 'orders_daily', name: '订单离线加工', type: '工作流', owner: '李四', status: '运行中', date: '2026-11-19', time: '01:00:00', run: 'retail_run_106' },
+      { id: 'ods_order_sync', name: '订单源表同步', type: '管道', owner: '张三', status: '成功', date: '2026-11-19', time: '00:45:22', run: 'retail_run_105' },
+      { id: 'sales_by_region', name: '地区成交额汇总', type: '工作流', owner: '李四', status: '失败', date: '2026-11-18', time: '01:02:16', run: 'retail_run_104' }
+    ]
+  },
+  market: {
+    name: '营销分析', id: 'pg_002', initial: '营', role: '使用者',
+    sources: ['活动 MySQL'],
+    tasks: [
+      { id: 'campaign_daily', name: '活动效果汇总', type: '工作流', owner: '王五', status: '成功', date: '2026-11-19', time: '02:17:00', run: 'market_run_208' },
+      { id: 'audience_events_sync', name: '受众事件同步', type: '管道', owner: '王五', status: '成功', date: '2026-11-19', time: '01:50:31', run: 'market_run_207' }
+    ]
+  }
+};
+const data = structuredClone(fixtures);
+const emptyTasks = { retail: [], market: [] };
+let projectKey = 'retail';
+let scenario = 'normal';
+let page = 'tasks';
+let filter = '';
+let query = '';
+let dirty = false;
+let draft;
+let deferred;
+let toastTimer;
+let demoRun = 1;
+
+const el = (id) => document.getElementById(id);
+const screen = el('screen');
+const projectMenu = el('project-list');
+const projectTrigger = el('project-trigger');
+const confirm = el('confirm-dialog');
+const details = el('details');
+const htmlEscape = (value) => String(value).replace(/[&<>"']/g, char =>
+  ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[char]);
+const statusClass = { '成功':'success', '运行中':'running', '失败':'failed' };
+const statusBadge = (value) => '<span class="status ' + (statusClass[value] || '') + '"><i aria-hidden="true"></i>' + htmlEscape(value) + '</span>';
+const field = (action, name, label, extra = '') => '<button type="button" class="button ' + extra + '" data-action="' + action + '" data-id="' + htmlEscape(name) + '">' + label + '</button>';
+
+function available() {
+  if (scenario === 'none' || scenario === 'unavailable') return [];
+  return scenario === 'revoked' ? ['market'] : ['retail', 'market'];
+}
+
+function active() {
+  if (!available().includes(projectKey)) return undefined;
+  const project = data[projectKey];
+  return { ...project, role: scenario === 'leader' && projectKey === 'retail' ? '组长' : project.role };
+}
+
+function closeMenu(returnFocus = false) {
+  projectMenu.hidden = true;
+  projectTrigger.setAttribute('aria-expanded', 'false');
+  if (returnFocus && !projectTrigger.disabled) projectTrigger.focus();
+}
+
+function renderMenu() {
+  const project = active();
+  el('project-label').textContent = project?.name || '选择项目';
+  projectTrigger.disabled = !available().length;
+  projectMenu.innerHTML = '<div class="popover-title">可访问项目</div>' + available().map(key => {
+    const item = data[key];
+    const role = scenario === 'leader' && key === 'retail' ? '组长' : item.role;
+    return '<button type="button" class="project-option ' + (key === projectKey ? 'current' : '') +
+      '" data-action="switch" data-id="' + key + '"' + (key === projectKey ? ' aria-current="true"' : '') +
+      '><span class="initial" aria-hidden="true">' + item.initial + '</span><span><strong>' + item.name +
+      '</strong><small>' + role + (item.primary ? ' · 主项目' : '') + '</small></span>' +
+      (key === projectKey ? '<span class="pill blue">当前</span>' : '') + '</button>';
+  }).join('');
+}
+
+function renderNavigation(project) {
+  const entries = [
+    ['tasks', '▤', '任务列表'], ['runs', '◷', '运行记录'], ['sources', '▱', '已绑定数据源']
+  ];
+  if (project?.role === '组长') entries.push(['manage', '◉', '成员与权限']);
+  el('navigation').innerHTML = entries.map(([key, icon, label]) => '<button type="button" data-action="navigate" data-id="' + key +
+    '" ' + (page === key || (key === 'tasks' && page === 'editor') ? 'aria-current="page"' : '') +
+    (project ? '' : ' disabled') + '><span class="nav-icon" aria-hidden="true">' + icon + '</span>' + label + '</button>').join('');
+}
+
+function render() {
+  const project = active();
+  renderMenu();
+  renderNavigation(project);
+  if (!project) {
+    const revoked = scenario === 'revoked';
+    const unavailable = scenario === 'unavailable';
+    screen.innerHTML = '<div class="bread">数据开发 <span aria-hidden="true">/</span> 项目空间</div>' +
+      '<div class="page-head"><h1>项目空间</h1></div><section class="panel">' +
+      emptyState(unavailable ? '权限服务暂不可用' : revoked ? '项目访问权限已收回' : '没有可访问的项目',
+        unavailable ? '项目数据暂停展示。权限服务恢复后可重试。' :
+          revoked ? '原项目的数据和未保存内容已清除，请选择仍可访问的项目。' : '请联系项目组长邀请你加入项目。',
+        unavailable ? field('retry', '', '重试', 'primary') : revoked ? field('choose', '', '选择其他项目', 'primary') : '') +
+      '</section>';
+    return;
+  }
+
+  const title = { tasks:'任务列表', runs:'运行记录', sources:'已绑定数据源', manage:'成员与权限', editor:draft?.id ? '编辑任务' : '新建任务' }[page];
+  const description = {
+    tasks:'管理当前项目的工作流与管道。', runs:'按业务日期查看当前项目的任务执行情况。',
+    sources:'任务仅可选择本项目已绑定的数据源。', manage:'管理当前项目的成员和角色。', editor:'任务保存后归属当前项目。'
+  }[page];
+  const canChange = project.role !== '使用者';
+  let primaryAction = page === 'tasks' && canChange ? field('new', '', '＋ 新建任务', 'primary') : '';
+  if (page === 'editor') primaryAction = field('navigate', 'tasks', '返回任务列表');
+  const tasks = displayedTasks(project);
+  screen.innerHTML = '<div class="bread">数据开发 <span aria-hidden="true">/</span> ' + project.name +
+    '<span aria-hidden="true">/</span> ' + title + '</div><div class="page-head"><div><h1>' + title +
+    '</h1><p>' + description + '</p></div>' + primaryAction + '</div>' + summary(project);
+  if (page === 'editor') {
+    screen.insertAdjacentHTML('beforeend', editor(project));
+    return;
+  }
+  if (!canChange && ['tasks', 'runs'].includes(page)) {
+    screen.insertAdjacentHTML('beforeend', '<p class="notice">你在「营销分析」中的角色为使用者，可查看任务及运行记录。</p>');
+  }
+  if (page === 'tasks') {
+    screen.insertAdjacentHTML('beforeend', '<section class="metrics" aria-label="项目任务汇总">' +
+      metric('项目任务', tasks.length) + metric('运行中', tasks.filter(t => t.status === '运行中').length) +
+      metric('最近运行失败', tasks.filter(t => t.status === '失败').length) + '</section>');
+  }
+  if (page === 'sources') {
+    screen.insertAdjacentHTML('beforeend', '<section class="panel"><div class="panel-head"><h2>授权连接</h2></div>' +
+      '<div class="table-wrap"><table><thead><tr><th scope="col">数据源</th><th scope="col">引用状态</th></tr></thead><tbody>' +
+      project.sources.map(source => '<tr><td>' + source + '</td><td><span class="pill blue">已绑定</span></td></tr>').join('') +
+      '</tbody></table></div></section>');
+  } else if (page === 'manage') {
+    screen.insertAdjacentHTML('beforeend', '<section class="panel"><div class="panel-head"><h2>项目成员</h2></div>' +
+      '<div class="table-wrap"><table><thead><tr><th scope="col">成员</th><th scope="col">项目角色</th></tr></thead><tbody>' +
+      '<tr><td>李四</td><td><span class="pill blue">组长</span></td></tr><tr><td>张三</td><td>开发者</td></tr>' +
+      '</tbody></table></div></section>');
+  } else {
+    screen.insertAdjacentHTML('beforeend', '<section class="panel"><div class="panel-head"><div><h2>' +
+      (page === 'tasks' ? '项目内任务' : '项目内运行') + '</h2><p>最近执行时间使用 Asia/Shanghai</p></div></div>' +
+      '<div class="panel-tools"><input class="field" id="search" type="search" aria-label="搜索任务名称或标识" placeholder="搜索任务名称或标识" value="' +
+      htmlEscape(query) + '"><select class="field" id="status-filter" aria-label="运行状态筛选"><option value="">全部状态</option>' +
+      ['运行中','成功','失败'].map(state => '<option' + (state === filter ? ' selected' : '') + '>' + state + '</option>').join('') +
+      '</select></div><div id="task-results"></div></section>');
+    renderTasks();
+  }
+}
+
+function displayedTasks(project) {
+  return scenario === 'empty' ? emptyTasks[projectKey] : project.tasks;
+}
+
+function summary(project) {
+  return '<section class="intro" aria-label="当前项目和角色"><div class="project-summary"><span class="initial" aria-hidden="true">' + project.initial +
+    '</span><div><h2>' + project.name + '</h2><div class="summary-id"><span class="mono">' + project.id + '</span>' +
+    (project.primary ? '<span class="pill">主项目</span>' : '') + '</div></div></div><span class="pill blue">当前角色 · ' + project.role + '</span></section>';
+}
+
+function metric(label, count) {
+  return '<div class="metric"><span>' + label + '</span><strong>' + count + '</strong></div>';
+}
+
+function emptyState(title, message, button = '') {
+  return '<div class="empty"><span class="empty-icon" aria-hidden="true">▤</span><h2>' + title + '</h2><p class="muted">' + message + '</p>' + button + '</div>';
+}
+
+function renderTasks() {
+  const project = active();
+  const results = el('task-results');
+  if (!project || !results) return;
+  const tasks = displayedTasks(project);
+  const term = query.trim().toLowerCase();
+  const shown = tasks.filter(t => (!filter || t.status === filter) && (t.name + ' ' + t.id).toLowerCase().includes(term));
+  if (!shown.length) {
+    results.innerHTML = tasks.length
+      ? emptyState('没有匹配的任务', '调整关键词或运行状态后重试。', field('clear', '', '清除筛选'))
+      : emptyState('当前项目暂无任务', '本项目中的工作流和管道会显示在此处。',
+        project.role === '使用者' || page === 'runs' ? '' : field('new', '', '新建任务', 'primary'));
+    return;
+  }
+  results.innerHTML = '<div class="table-wrap" tabindex="0" aria-label="任务表格，可横向滚动"><table><thead><tr><th scope="col">任务</th>' +
+    '<th scope="col">业务日期</th><th scope="col">状态</th><th scope="col">负责人</th><th scope="col">最近运行</th><th scope="col">操作</th></tr></thead><tbody>' +
+    shown.map(t => '<tr><td><strong>' + htmlEscape(t.name) + '</strong><small class="mono">' + htmlEscape(t.id) +
+      ' · ' + t.type + '</small></td><td class="mono">' + t.date + '</td><td>' + statusBadge(t.status) +
+      '</td><td>' + t.owner + '</td><td class="mono">' + t.time + '</td><td class="inline-actions">' +
+      field('detail', t.id, '详情', 'quiet') +
+      (page === 'tasks' && project.role !== '使用者' ? field('edit', t.id, '编辑', 'quiet') : '') + '</td></tr>').join('') +
+    '</tbody></table></div><div class="table-bottom" aria-live="polite">共 ' + shown.length + ' 条</div>';
+}
+
+function editor(project) {
+  return '<section class="panel"><div class="panel-head"><div><h2>任务配置</h2><p>已应用「' + project.name + '」的资源范围</p></div>' +
+    '<span class="pill" id="draft-indicator">尚无修改</span></div><form id="task-form" class="editor">' +
+    '<div class="editor-fields"><label for="draft-name">任务名称<input id="draft-name" class="field" required maxlength="60" value="' +
+    htmlEscape(draft.name) + '"></label><label for="draft-source">数据源<select id="draft-source" class="field">' +
+    project.sources.map(source => '<option' + (source === draft.source ? ' selected' : '') + '>' + source + '</option>').join('') +
+    '</select></label></div><label for="draft-sql">SQL<textarea id="draft-sql" class="field mono" spellcheck="false">' +
+    htmlEscape(draft.sql) + '</textarea></label><div><button type="submit" class="button primary">保存任务</button></div></form></section>';
+}
+
+function detail(task) {
+  const project = active();
+  const canRun = project && project.role !== '使用者';
+  el('details-body').innerHTML = '<p class="muted">' + htmlEscape(task.name) + '</p><dl>' +
+    '<dt>归属项目</dt><dd>' + project.name + '</dd><dt>任务标识</dt><dd class="mono">' + htmlEscape(task.id) +
+    '</dd><dt>运行 ID</dt><dd class="mono">' + task.run + '</dd><dt>业务日期</dt><dd class="mono">' + task.date +
+    '</dd><dt>状态</dt><dd>' + statusBadge(task.status) + '</dd><dt>负责人</dt><dd>' + task.owner + '</dd></dl>' +
+    (task.status === '失败' ? '<p class="notice error">金额对账未通过，地区成交额产出已阻断。</p>' : '') +
+    (canRun ? '<div class="dialog-actions">' + field('run', task.id, '手动运行', 'primary') + '</div>' : '');
+  details.showModal();
+}
+
+function notify(message) {
+  clearTimeout(toastTimer);
+  el('notice').textContent = message;
+  toastTimer = setTimeout(() => { el('notice').textContent = ''; }, 2800);
+}
+
+function switchTo(key) {
+  if (!available().includes(key) || key === projectKey) return;
+  guard('切换项目会清除当前未保存内容。', () => {
+    projectKey = key;
+    resetView();
+    render();
+    projectTrigger.focus();
+  });
+}
+
+function guard(message, action) {
+  if (page !== 'editor' || !dirty) return action();
+  deferred = action;
+  el('confirm-message').textContent = message;
+  confirm.returnValue = '';
+  confirm.showModal();
+}
+
+function resetView() {
+  page = 'tasks';
+  filter = query = '';
+  dirty = false;
+  draft = undefined;
+  if (details.open) details.close();
+  el('details-body').replaceChildren();
+  clearTimeout(toastTimer);
+  el('notice').textContent = '';
+  closeMenu();
+}
+
+confirm.addEventListener('close', () => {
+  const action = deferred;
+  deferred = undefined;
+  if (confirm.returnValue === 'discard') action?.();
+  else el('draft-sql')?.focus();
+});
+
+projectTrigger.addEventListener('click', () => {
+  if (!projectMenu.hidden) return closeMenu(true);
+  projectMenu.hidden = false;
+  projectTrigger.setAttribute('aria-expanded', 'true');
+  (projectMenu.querySelector('[aria-current]') || projectMenu.querySelector('button'))?.focus();
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !projectMenu.hidden) closeMenu(true);
+  const options = [...projectMenu.querySelectorAll('button')];
+  const index = options.indexOf(document.activeElement);
+  if (index >= 0 && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+    event.preventDefault();
+    const offset = event.key === 'ArrowDown' ? 1 : -1;
+    options[(index + offset + options.length) % options.length].focus();
+  }
+});
+
+el('scenario').addEventListener('change', event => {
+  const next = event.target.value;
+  event.target.value = scenario;
+  const apply = () => {
+    scenario = next;
+    event.target.value = scenario;
+    projectKey = next === 'none' || next === 'unavailable' || next === 'revoked' ? null : 'retail';
+    resetView();
+    render();
+  };
+  if (['revoked', 'none', 'unavailable'].includes(next)) apply();
+  else guard('切换演示场景会清除当前未保存内容。', apply);
+});
+
+document.addEventListener('click', event => {
+  if (!event.target.closest('#project-control') && !projectMenu.hidden) closeMenu();
+  const control = event.target.closest('button[data-action]');
+  if (!control) return;
+  const { action, id } = control.dataset;
+  if (action === 'switch') {
+    closeMenu(true);
+    switchTo(id);
+    return;
+  }
+  if (action === 'choose') return projectTrigger.click();
+  if (action === 'retry') {
+    el('scenario').value = 'normal';
+    el('scenario').dispatchEvent(new Event('change'));
+    notify('演示权限服务已恢复');
+    return;
+  }
+  const project = active();
+  if (!project) return;
+  if (action === 'navigate') {
+    if (id === page || (id === 'manage' && project.role !== '组长')) return;
+    guard('离开编辑页会清除当前未保存内容。', () => {
+      resetView();
+      page = id;
+      render();
+    });
+  }
+  if (action === 'clear') {
+    filter = query = '';
+    el('search').value = '';
+    el('status-filter').value = '';
+    renderTasks();
+    el('search').focus();
+  }
+  const task = displayedTasks(project).find(row => row.id === id);
+  if (action === 'detail' && task) detail(task);
+  if (project.role === '使用者') return;
+  if (action === 'new' || (action === 'edit' && task)) {
+    draft = { id: task?.id, name: task?.name || '', source: task?.source || project.sources[0], sql: task?.sql ?? (task ? 'SELECT * FROM ods_orders' : '') };
+    dirty = false;
+    page = 'editor';
+    render();
+    el('draft-name').focus();
+  }
+  if (action === 'run' && task) {
+    task.status = '运行中';
+    task.run = projectKey + '_demo_run_' + demoRun++;
+    details.close();
+    render();
+    notify('演示运行已受理 · ' + task.run);
+  }
+});
+
+screen.addEventListener('input', event => {
+  if (event.target.id === 'search') {
+    query = event.target.value;
+    renderTasks();
+  } else if (event.target.closest('#task-form')) {
+    dirty = true;
+    el('draft-indicator').textContent = '未保存';
+  }
+});
+
+screen.addEventListener('change', event => {
+  if (event.target.id === 'status-filter') {
+    filter = event.target.value;
+    renderTasks();
+  }
+});
+
+screen.addEventListener('submit', event => {
+  if (event.target.id !== 'task-form') return;
+  event.preventDefault();
+  const project = active();
+  if (!project || project.role === '使用者') return;
+  const name = el('draft-name').value.trim();
+  if (!name) return el('draft-name').focus();
+  const tasks = displayedTasks(project);
+  const saved = { name, source: el('draft-source').value, sql: el('draft-sql').value };
+  const existing = tasks.find(t => t.id === draft.id);
+  if (existing) Object.assign(existing, saved);
+  else {
+    tasks.unshift({ id:'draft_' + demoRun++, ...saved, type:'工作流', owner:'李四',
+      status:'待运行', date:'—', time:'—', run:'—' });
+  }
+  resetView();
+  render();
+  notify('已保存到「' + project.name + '」的演示数据');
+});
+
+render();
+</script>
+</body>
+</html>

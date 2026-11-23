@@ -1,9 +1,7 @@
 package com.datakhaos.query.controller;
 
-import cn.hutool.core.util.StrUtil;
 import com.datakhaos.common.model.PageResult;
 import com.datakhaos.common.model.R;
-import com.datakhaos.common.security.MetadataHolder;
 import com.datakhaos.datasource.api.model.ColumnInfo;
 import com.datakhaos.datasource.api.model.QueryResult;
 import com.datakhaos.query.dto.QueryExecuteRequest;
@@ -33,16 +31,14 @@ public class QueryController {
 
     @Operation(summary = "执行 SQL（自动审核 + 可选表权限校验）")
     @PostMapping("/execute")
-    public R<QueryResult> execute(@RequestBody QueryExecuteRequest request,
-                                  @RequestParam(required = false) String userId) {
-        return R.ok(queryService.execute(request, currentUser(userId)));
+    public R<QueryResult> execute(@RequestBody QueryExecuteRequest request) {
+        return R.ok(queryService.execute(request));
     }
 
     @Operation(summary = "导出查询结果为 CSV")
     @PostMapping("/export")
-    public ResponseEntity<String> export(@RequestBody QueryExecuteRequest request,
-                                         @RequestParam(required = false) String userId) {
-        QueryResult result = queryService.execute(request, currentUser(userId));
+    public ResponseEntity<String> export(@RequestBody QueryExecuteRequest request) {
+        QueryResult result = queryService.execute(request);
         String csv = toCsv(result);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=query_result.csv")
@@ -53,20 +49,14 @@ public class QueryController {
     @Operation(summary = "查询历史（分页）")
     @GetMapping("/history")
     public R<PageResult<QueryHistory>> history(@RequestParam(defaultValue = "1") long current,
-                                               @RequestParam(defaultValue = "10") long size,
-                                               @RequestParam(required = false) String userId) {
-        return R.ok(queryService.history(current, size, currentUser(userId)));
+                                               @RequestParam(defaultValue = "10") long size) {
+        return R.ok(queryService.history(current, size));
     }
 
     @Operation(summary = "查询历史详情")
     @GetMapping("/history/{id}")
     public R<QueryHistory> historyDetail(@PathVariable String id) {
         return R.ok(queryService.historyDetail(id));
-    }
-
-    private String currentUser(String fallback) {
-        String uid = MetadataHolder.getUserId();
-        return uid != null ? uid : (StrUtil.isBlank(fallback) ? null : fallback);
     }
 
     /** QueryResult 转 CSV（含 UTF-8 BOM，避免 Excel 中文乱码） */

@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.datakhaos.common.constant.CommonConstants;
 import com.datakhaos.common.model.R;
 import com.datakhaos.pipeline.api.model.PipelineInstanceDto;
+import com.datakhaos.pipeline.api.model.PipelineTaskDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
@@ -48,9 +49,10 @@ public class PipelineApiClient {
      * @param triggerType      触发方式 MANUAL/CRON/SCHEDULE/WORKFLOW
      * @param workflowRunId    关联工作流运行ID（可空）
      * @param workflowNodeRunId 关联工作流节点运行ID（可空）
+     * @param bizDate          业务日期 YYYY-MM-DD（按日重算任务使用，可空）
      */
     public PipelineInstanceDto trigger(String taskId, String triggerType,
-                                       String workflowRunId, String workflowNodeRunId) {
+                                       String workflowRunId, String workflowNodeRunId, String bizDate) {
         StringBuilder url = new StringBuilder(SERVICE_URL)
                 .append("/task/").append(taskId)
                 .append("/run?triggerType=").append(triggerType);
@@ -59,6 +61,9 @@ public class PipelineApiClient {
         }
         if (StrUtil.isNotBlank(workflowNodeRunId)) {
             url.append("&workflowNodeRunId=").append(workflowNodeRunId);
+        }
+        if (StrUtil.isNotBlank(bizDate)) {
+            url.append("&bizDate=").append(bizDate);
         }
         ResponseEntity<R<PipelineInstanceDto>> resp = restTemplate.exchange(
                 url.toString(),
@@ -78,9 +83,9 @@ public class PipelineApiClient {
      * 命中则视为已受理，避免重复写入；未命中才向上抛出。
      */
     public TriggerResult triggerSafely(String taskId, String triggerType,
-                                       String workflowRunId, String workflowNodeRunId) {
+                                       String workflowRunId, String workflowNodeRunId, String bizDate) {
         try {
-            PipelineInstanceDto instance = trigger(taskId, triggerType, workflowRunId, workflowNodeRunId);
+            PipelineInstanceDto instance = trigger(taskId, triggerType, workflowRunId, workflowNodeRunId, bizDate);
             return new TriggerResult(instance, false);
         } catch (RestClientException e) {
             PipelineInstanceDto existing = findByWorkflowNode(workflowRunId, workflowNodeRunId);
@@ -138,6 +143,67 @@ public class PipelineApiClient {
                     workflowRunId, workflowNodeRunId, e.getMessage());
         }
         return null;
+    }
+
+    /**
+     * 查询任务定义（PR3：把节点声明的源/目标表并入运行证据）。
+     * 查询失败返回 null，由调用方按「声明缺失」处理。
+     */
+    public PipelineTaskDto getTask(String taskId) {
+        if (StrUtil.isBlank(taskId)) {
+            return null;
+        }
+        try {
+            ResponseEntity<R<PipelineTaskDto>> resp = restTemplate.exchange(
+                    SERVICE_URL + "/task/{id}",
+                    HttpMethod.GET,
+                    new HttpEntity<>(null, systemHeaders()),
+                    new ParameterizedTypeReference<R<PipelineTaskDto>>() {},
+                    taskId);
+            R<PipelineTaskDto> body = resp.getBody();
+            if (body != null && body.getCode() == 0) {
+                return body.getData();
+            }
+            log.warn("查询管道任务失败: taskId={}, msg={}", taskId, body == null ? "无响应" : body.getMsg());
+        } catch (Exception e) {
+            log.warn("查询管道任务异常: taskId={}, error={}", taskId, e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * 按目标表反查实例（PR3：数据地图回查某分区最近一次发布记录）。
+     * 查询异常时返回空列表，由调用方按「无证据」处理。
+     */
+    public List<PipelineInstanceDto> findByTarget(String datasourceId, String databaseName, String targetTable,
+                                                  String bizDate, boolean published, int limit) {
+        if (StrUtil.hasBlank(datasourceId, databaseName, targetTable)) {
+            return List.of();
+        }
+        try {
+            UriComponentsBuilder builder = UriComponentsBuilder
+                    .fromHttpUrl(SERVICE_URL + "/instance/by-target")
+                    .queryParam("datasourceId", datasourceId)
+                    .queryParam("databaseName", databaseName)
+                    .queryParam("targetTable", targetTable)
+                    .queryParam("published", published)
+                    .queryParam("limit", Math.max(1, Math.min(limit, 100)));
+            if (StrUtil.isNotBlank(bizDate)) {
+                builder.queryParam("bizDate", bizDate);
+            }
+            ResponseEntity<R<List<PipelineInstanceDto>>> resp = restTemplate.exchange(
+                    builder.build().encode().toUri(),
+                    HttpMethod.GET,
+                    new HttpEntity<>(null, systemHeaders()),
+                    new ParameterizedTypeReference<R<List<PipelineInstanceDto>>>() {});
+            R<List<PipelineInstanceDto>> body = resp.getBody();
+            if (body != null && body.getCode() == 0 && body.getData() != null) {
+                return body.getData();
+            }
+        } catch (Exception e) {
+            log.warn("按目标表反查实例异常: targetTable={}, bizDate={}, error={}", targetTable, bizDate, e.getMessage());
+        }
+        return List.of();
     }
 
     /**

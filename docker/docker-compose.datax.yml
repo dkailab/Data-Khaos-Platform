@@ -1,0 +1,20 @@
+# ============================================================
+# Data Khaos - DataX 引擎可选构建覆盖文件
+#
+# DataX 发行包约 1GB 且来自公网镜像，默认构建不包含它（默认 pipeline_stage
+# 只跑 DB_SYNC，MySQL 基线验收不需要 DataX）。需要真实 MySQL → Hive 同步时：
+#
+#   docker compose -f docker/docker-compose.yml \
+#                  -f docker/docker-compose.datax.yml \
+#                  build pipeline
+#   docker compose -f docker/docker-compose.yml \
+#                  -f docker/docker-compose.datax.yml up -d pipeline
+#
+# 首次构建会下载并解压 DataX（写入 BuildKit 缓存 id=dk-datax，后续复用）。
+# 下载失败时镜像仍会产出，只是 /opt/datax/DISABLED 存在、DATAX 引擎不可用。
+# ============================================================
+
+services:
+  pipeline:
+    build:
+      target: pipeline_datax

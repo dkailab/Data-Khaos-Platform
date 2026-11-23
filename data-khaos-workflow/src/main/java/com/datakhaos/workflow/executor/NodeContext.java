@@ -39,4 +39,7 @@ public class NodeContext {
 
     /** 当前节点运行记录ID（供 PIPELINE 节点回填关联） */
     private String nodeRunId;
+
+    /** 业务日期 YYYY-MM-DD（PR2A 运行上下文注入；为空表示旧式运行） */
+    private String bizDate;
 }

@@ -3,6 +3,7 @@ package com.datakhaos.pipeline.engine;
 import cn.hutool.core.util.StrUtil;
 import com.datakhaos.common.exception.BusinessException;
 import com.datakhaos.common.util.EncryptUtil;
+import com.datakhaos.datasource.api.model.JdbcConnectionUrls;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.sql.Connection;
@@ -23,7 +24,7 @@ public final class EngineUtils {
     /** 从 meta_datasource 读取某数据源连接信息 */
     public static Map<String, Object> getDs(JdbcTemplate jdbcTemplate, String dsId) {
         List<Map<String, Object>> list = jdbcTemplate.queryForList(
-                "SELECT ds_type, host, port, database_name, username, password FROM meta_datasource WHERE id = ?", dsId);
+                "SELECT ds_type, host, port, database_name, username, password, properties FROM meta_datasource WHERE id = ?", dsId);
         if (list.isEmpty()) {
             throw new BusinessException("数据源不存在: " + dsId);
         }
@@ -39,9 +40,10 @@ public final class EngineUtils {
         String type = String.valueOf(ds.get("ds_type")).toUpperCase();
         String host = String.valueOf(ds.get("host"));
         int port = ((Number) ds.get("port")).intValue();
-        String db = String.valueOf(ds.get("database_name"));
+        String db = (String) ds.get("database_name");
         return switch (type) {
-            case "HIVE" -> "jdbc:hive2://" + host + ":" + port + "/" + db;
+            case "HIVE" -> JdbcConnectionUrls.hive(host + ":" + port, db, (String) ds.get("properties"));
+            case "DM8" -> JdbcConnectionUrls.dameng(host + ":" + port, db);
             default -> "jdbc:mysql://" + host + ":" + port + "/" + db
                     + "?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai";
         };

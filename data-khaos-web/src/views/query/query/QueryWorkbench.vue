@@ -1,12 +1,13 @@
 <template>
-  <el-row :gutter="16">
-    <el-col :span="18">
+  <el-row :gutter="16" class="query-workbench">
+    <el-col :xs="24" :lg="17">
       <el-card shadow="never">
         <template #header>
           <div class="card-header">
             <span>SQL 查询工作台</span>
+            <DkButton :loading="submitting" @click="submitBackground">后台查询</DkButton>
             <el-button type="primary" size="small" :icon="CaretRight" :loading="executing" @click="runQuery">执行</el-button>
-            <el-button size="small" :icon="Download" :disabled="!result || result.columns.length === 0" @click="exportCsv">
+            <el-button size="small" :icon="Download" :disabled="!result || result.columns.length === 0 || fromQueryJob" @click="exportCsv">
               导出 CSV
             </el-button>
           </div>
@@ -37,23 +38,25 @@
         </div>
       </el-card>
 
-      <el-card shadow="never" class="result-card">
-        <template #header>
-          <div class="card-header">
-            <span>查询结果</span>
-            <span v-if="result && result.columns.length" class="result-meta">
-              共 {{ result.rows.length }} 行，耗时 {{ result.costMs }} ms
-            </span>
-          </div>
-        </template>
-        <el-table :data="result?.rows || []" size="small" border max-height="420" v-loading="executing">
-          <el-table-column v-for="col in result?.columns || []" :key="col.columnName" :prop="col.columnName" :label="col.columnName" min-width="120" show-overflow-tooltip />
-        </el-table>
-        <el-empty v-if="!executing && result && result.columns.length === 0" description="无数据" />
-      </el-card>
+      <div ref="resultSection" tabindex="-1" class="result-card">
+        <el-card shadow="never">
+          <template #header>
+            <div class="card-header">
+              <span>{{ fromQueryJob ? '后台查询结果' : '查询结果' }}</span>
+              <span v-if="result && result.columns.length" class="result-meta">
+                共 {{ result.rows.length }} 行，耗时 {{ result.costMs }} ms
+              </span>
+            </div>
+          </template>
+          <el-table :data="result?.rows || []" size="small" border max-height="420" v-loading="executing">
+            <el-table-column v-for="col in result?.columns || []" :key="col.columnName" :prop="col.columnName" :label="col.columnName" min-width="120" show-overflow-tooltip />
+          </el-table>
+          <el-empty v-if="!executing && result && result.columns.length === 0" description="无数据" />
+        </el-card>
+      </div>
     </el-col>
 
-    <el-col :span="6">
+    <el-col :xs="24" :lg="7">
       <el-card shadow="never">
         <template #header>查询历史</template>
         <el-table v-loading="historyLoading" :data="historyList" size="small" border>
@@ -81,18 +84,29 @@
         />
       </el-card>
     </el-col>
+    <el-col :span="24">
+      <QueryJobPanel ref="jobPanel" @show-result="showJobResult" @restore-sql="useJobSql" />
+    </el-col>
   </el-row>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CaretRight, Download, Loading } from '@element-plus/icons-vue'
-import { executeQuery, exportQueryResult, queryHistory } from '@/api/query'
+import { executeQuery, exportQueryResult, queryHistory, submitQueryJob } from '@/api/query'
 import { pageDatasources } from '@/api/datasource'
-import type { MetaDatasource, QueryHistory, QueryResult } from '@/types'
+import type { MetaDatasource, QueryHistory, QueryJob, QueryResult } from '@/types'
+import { createRequestId } from '@/utils/requestId'
+import DkButton from '@/paas-ui/DkButton.vue'
+import QueryJobPanel from './QueryJobPanel.vue'
 
 const executing = ref(false)
+const submitting = ref(false)
+const fromQueryJob = ref(false)
+const resultSection = ref<HTMLDivElement>()
+const jobPanel = ref<InstanceType<typeof QueryJobPanel>>()
+let lastSubmission: { input: string; requestId: string } | undefined
 const historyLoading = ref(false)
 const datasources = ref<MetaDatasource[]>([])
 const sqlText = ref('')
@@ -127,10 +141,50 @@ async function runQuery() {
       databaseName: sqlForm.databaseName || undefined,
       sql: sqlText.value,
     })
+    fromQueryJob.value = false
     loadHistory()
   } finally {
     executing.value = false
   }
+}
+
+async function submitBackground() {
+  if (!sqlForm.datasourceId || !sqlText.value.trim()) {
+    ElMessage.warning('请选择数据源并输入 SQL')
+    return
+  }
+  const data = {
+    datasourceId: sqlForm.datasourceId,
+    databaseName: sqlForm.databaseName || undefined,
+    sql: sqlText.value,
+  }
+  const input = JSON.stringify(data)
+  const requestId = lastSubmission?.input === input ? lastSubmission.requestId : createRequestId()
+  lastSubmission = { input, requestId }
+  submitting.value = true
+  try {
+    await submitQueryJob({ ...data, requestId })
+    lastSubmission = undefined
+    ElMessage.success('查询任务已提交')
+    await jobPanel.value?.showLatest()
+  } catch {
+    // 请求失败时保留本次请求标识，避免再次提交产生重复任务。
+  } finally {
+    submitting.value = false
+  }
+}
+
+async function showJobResult(data: QueryResult) {
+  result.value = data
+  fromQueryJob.value = true
+  await nextTick()
+  resultSection.value?.focus()
+}
+
+function useJobSql(job: QueryJob) {
+  sqlText.value = job.sqlText
+  sqlForm.datasourceId = job.datasourceId
+  sqlForm.databaseName = job.databaseName || ''
 }
 
 async function exportCsv() {
@@ -166,10 +220,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.query-workbench { row-gap: 16px; }
 .card-header {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .sql-toolbar {
   margin-bottom: 8px;

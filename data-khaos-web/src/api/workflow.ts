@@ -1,5 +1,5 @@
 import { del, get, post, put } from './request'
-import type { PageResult, WorkflowDef, WorkflowGraph, WorkflowNodeRun, WorkflowRun } from '@/types'
+import type { PageResult, WorkflowDef, WorkflowGraph, WorkflowNodeRun, WorkflowRevision, WorkflowRun } from '@/types'
 
 /** 保存工作流图（新增/整体更新） */
 export function saveWorkflowGraph(data: WorkflowGraph) {
@@ -44,4 +44,16 @@ export function getWorkflowRun(runId: string) {
 /** 某次运行的节点执行记录 */
 export function listWorkflowRunNodes(runId: string) {
   return get<WorkflowNodeRun[]>(`/workflow/run/${runId}/nodes`)
+}
+
+export function pageWorkflowRevisions(id: string, current: number, size: number) {
+  return get<PageResult<WorkflowRevision>>(`/workflow/${id}/revisions`, { current, size })
+}
+
+export function createWorkflowRevision(id: string, note: string) {
+  return post<WorkflowRevision>(`/workflow/${id}/revisions`, { note })
+}
+
+export function createWorkflowRevisionDraft(id: string, revisionId: string, name: string) {
+  return post<WorkflowDef>(`/workflow/${id}/revisions/${revisionId}/draft`, { name })
 }

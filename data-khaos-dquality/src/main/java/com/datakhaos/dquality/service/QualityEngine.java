@@ -49,10 +49,26 @@ public class QualityEngine {
     public static final String TYPE_CUSTOM_SQL = "CUSTOM_SQL";
     public static final String TYPE_CUSTOM_PROBE = "CUSTOM_PROBE";
 
+    /** 规则执行异常码：无目标表权限 */
+    public static final String ERR_NO_PERMISSION = "NO_PERMISSION";
+    /** 规则执行异常码：稽核 SQL 执行失败 */
+    public static final String ERR_RULE_SQL = "RULE_SQL_FAILED";
+    /** 规则执行异常码：规则配置/类型非法或执行过程抛错 */
+    public static final String ERR_RULE_ERROR = "RULE_ERROR";
+
+    /** 快照结论：通过 */
+    public static final String CONCLUSION_PASS = "PASS";
+    /** 快照结论：规则不满足 */
+    public static final String CONCLUSION_FAIL = "FAIL";
+    /** 快照结论：稽核过程异常（无法判定） */
+    public static final String CONCLUSION_ERROR = "ERROR";
+
     /**
      * 稽核执行：对一个任务中的所有规则逐个执行，收集结果。
+     *
+     * @param bizDate 业务日期（可空）；非空且规则配置了 dateColumn 时，按该列过滤同一业务日数据
      */
-    public EngineResult execute(List<DqRule> rules, String userId, String triggerType) {
+    public EngineResult execute(List<DqRule> rules, String userId, String triggerType, String bizDate) {
         long start = System.currentTimeMillis();
         int total = rules.size();
         int pass = 0;
@@ -62,7 +78,7 @@ public class QualityEngine {
         List<DqRuleResult> results = new ArrayList<>();
 
         for (DqRule rule : rules) {
-            DqRuleResult result = executeRule(rule, userId);
+            DqRuleResult result = executeRule(rule, userId, bizDate);
             results.add(result);
             totalWeight = totalWeight.add(BigDecimal.valueOf(rule.getWeight()));
             if (result.getPassed() == 1) {
@@ -71,6 +87,21 @@ public class QualityEngine {
             } else {
                 fail++;
             }
+        }
+
+        // 结论：任一规则执行异常 → ERROR（无法判定，门禁应阻断）；
+        //       否则任一规则不满足 → FAIL；全部满足 → PASS。
+        String conclusion = CONCLUSION_PASS;
+        String errorCode = null;
+        for (DqRuleResult r : results) {
+            if (StrUtil.isNotBlank(r.getErrorCode())) {
+                conclusion = CONCLUSION_ERROR;
+                errorCode = r.getErrorCode();
+                break;
+            }
+        }
+        if (CONCLUSION_PASS.equals(conclusion) && fail > 0) {
+            conclusion = CONCLUSION_FAIL;
         }
 
         // 计算总评分：score = (passWeight / totalWeight) * 100
@@ -87,13 +118,15 @@ public class QualityEngine {
         er.setScore(score);
         er.setCostMs(System.currentTimeMillis() - start);
         er.setResults(results);
+        er.setConclusion(conclusion);
+        er.setErrorCode(errorCode);
         return er;
     }
 
     /**
      * 执行单个规则。
      */
-    private DqRuleResult executeRule(DqRule rule, String userId) {
+    private DqRuleResult executeRule(DqRule rule, String userId, String bizDate) {
         DqRuleResult result = new DqRuleResult();
         result.setRuleId(rule.getId());
 
@@ -110,18 +143,20 @@ public class QualityEngine {
                     userId, dsId, db, table, "SELECT");
             if (!hasPerm) {
                 result.setPassed(0);
+                result.setErrorCode(ERR_NO_PERMISSION);
                 result.setMessage("无目标表 SELECT 权限，无法稽核");
                 return result;
             }
         }
 
         try {
-            String sql = buildSql(rule);
+            String sql = buildSql(rule, bizDate);
             log.info("执行质量规则 [{}] {}: {}", rule.getId(), rule.getRuleName(), sql);
 
             R<QueryResult> resp = datasourceApiClient.executeRaw(dsId, sql);
             if (!resp.isSuccess() || resp.getData() == null) {
                 result.setPassed(0);
+                result.setErrorCode(ERR_RULE_SQL);
                 result.setMessage("执行稽核 SQL 失败: " + (resp.getMsg() != null ? resp.getMsg() : "空结果"));
                 return result;
             }
@@ -131,10 +166,12 @@ public class QualityEngine {
 
         } catch (BusinessException e) {
             result.setPassed(0);
+            result.setErrorCode(ERR_RULE_ERROR);
             result.setMessage(e.getMessage());
         } catch (Exception e) {
             log.error("规则执行异常: {}", rule.getId(), e);
             result.setPassed(0);
+            result.setErrorCode(ERR_RULE_ERROR);
             result.setMessage("执行异常: " + e.getMessage());
         }
 
@@ -145,41 +182,70 @@ public class QualityEngine {
     /**
      * 根据规则类型生成稽核 SQL。
      */
-    private String buildSql(DqRule rule) {
+    private String buildSql(DqRule rule, String bizDate) {
         String type = rule.getRuleType();
         String db = rule.getDatabaseName();
         String table = rule.getTableName();
         String col = rule.getColumnName();
         String config = rule.getRuleConfig();
+        String dateFilter = buildDateFilter(rule, bizDate);
 
         return switch (type) {
-            case TYPE_NOT_NULL -> buildNotNullSql(db, table, col);
-            case TYPE_UNIQUE -> buildUniqueSql(db, table, col);
-            case TYPE_VALUE_RANGE -> buildValueRangeSql(db, table, col, parseConfig(config));
+            case TYPE_NOT_NULL -> buildNotNullSql(db, table, col, dateFilter);
+            case TYPE_UNIQUE -> buildUniqueSql(db, table, col, dateFilter);
+            case TYPE_VALUE_RANGE -> buildValueRangeSql(db, table, col, parseConfig(config), dateFilter);
             case TYPE_CUSTOM_SQL, TYPE_CUSTOM_PROBE -> {
                 Map<String, Object> cfg = parseConfig(config);
                 String customSql = (String) cfg.get("customSql");
                 if (StrUtil.isBlank(customSql)) {
                     throw new BusinessException("自定义 SQL 不能为空");
                 }
-                yield SqlAuditUtil.audit(customSql);
+                yield SqlAuditUtil.audit(replaceBizDate(customSql, bizDate));
             }
             default -> throw new BusinessException("不支持的规则类型: " + type);
         };
     }
 
-    private String buildNotNullSql(String db, String table, String col) {
-        return String.format("SELECT COUNT(*) AS total, COUNT(`%s`) AS not_null FROM `%s`.`%s`",
-                col, db, table);
+    /**
+     * 业务日期过滤条件：规则配置了 dateColumn 且传入合法 bizDate 时生效。
+     * bizDate 严格限定 YYYY-MM-DD，避免拼接注入。
+     */
+    private String buildDateFilter(DqRule rule, String bizDate) {
+        if (StrUtil.isBlank(rule.getDateColumn()) || StrUtil.isBlank(bizDate)) {
+            return "";
+        }
+        if (!bizDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            throw new BusinessException("业务日期格式非法（应为 YYYY-MM-DD）: " + bizDate);
+        }
+        return " WHERE `" + rule.getDateColumn() + "` = '" + bizDate + "'";
     }
 
-    private String buildUniqueSql(String db, String table, String col) {
+    /** 自定义 SQL 中的 ${bizDate} 占位替换（未传日期则报错，避免全量误判） */
+    private String replaceBizDate(String sql, String bizDate) {
+        if (!sql.contains("${bizDate}")) {
+            return sql;
+        }
+        if (StrUtil.isBlank(bizDate)) {
+            throw new BusinessException("规则自定义 SQL 包含 ${bizDate} 占位，但本次运行未传入业务日期");
+        }
+        if (!bizDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            throw new BusinessException("业务日期格式非法（应为 YYYY-MM-DD）: " + bizDate);
+        }
+        return sql.replace("${bizDate}", bizDate);
+    }
+
+    private String buildNotNullSql(String db, String table, String col, String dateFilter) {
+        return String.format("SELECT COUNT(*) AS total, COUNT(`%s`) AS not_null FROM `%s`.`%s`%s",
+                col, db, table, dateFilter);
+    }
+
+    private String buildUniqueSql(String db, String table, String col, String dateFilter) {
         return String.format("SELECT COUNT(*) AS duplicate_count " +
-                        "FROM (SELECT `%s` FROM `%s`.`%s` GROUP BY `%s` HAVING COUNT(*) > 1) t",
-                col, db, table, col);
+                        "FROM (SELECT `%s` FROM `%s`.`%s`%s GROUP BY `%s` HAVING COUNT(*) > 1) t",
+                col, db, table, dateFilter, col);
     }
 
-    private String buildValueRangeSql(String db, String table, String col, Map<String, Object> config) {
+    private String buildValueRangeSql(String db, String table, String col, Map<String, Object> config, String dateFilter) {
         BigDecimal min = getDecimal(config, "min");
         BigDecimal max = getDecimal(config, "max");
         StringBuilder where = new StringBuilder();
@@ -194,8 +260,8 @@ public class QualityEngine {
             }
             where.append("`").append(col).append("` > ").append(max);
         }
-        return String.format("SELECT COUNT(*) AS total, COUNT(CASE WHEN %s THEN 1 END) AS bad FROM `%s`.`%s`",
-                where, db, table);
+        return String.format("SELECT COUNT(*) AS total, COUNT(CASE WHEN %s THEN 1 END) AS bad FROM `%s`.`%s`%s",
+                where, db, table, dateFilter);
     }
 
     /**
@@ -362,5 +428,9 @@ public class QualityEngine {
         private BigDecimal score;
         private long costMs;
         private List<DqRuleResult> results;
+        /** 结论 PASS/FAIL/ERROR */
+        private String conclusion;
+        /** ERROR 时的错误码 */
+        private String errorCode;
     }
 }

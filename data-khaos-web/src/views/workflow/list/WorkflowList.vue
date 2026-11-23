@@ -42,13 +42,14 @@
         </template>
       </el-table-column>
       <el-table-column prop="updateTime" label="更新时间" width="170" />
-      <el-table-column label="操作" width="300" fixed="right">
+      <el-table-column label="操作" width="340" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="router.push(`/workflow/edit/${row.id}`)">编排</el-button>
           <el-button v-if="row.status !== 1" link type="success" @click="handleStart(row)">启用</el-button>
           <el-button v-else link type="warning" @click="handleStop(row)">停用</el-button>
           <el-button link type="info" @click="handleRun(row)">运行</el-button>
           <el-button link type="primary" @click="openRunDialog(row.id)">记录</el-button>
+          <el-button link type="primary" @click="openRevisions(row)">版本</el-button>
           <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -63,6 +64,9 @@
       layout="total, sizes, prev, pager, next, jumper"
       @change="load"
     />
+
+    <WorkflowRevisionDialog v-if="revisionWorkflow" :workflow="revisionWorkflow"
+      @close="revisionWorkflow = undefined" @open-draft="openDraft" />
 
     <!-- 运行记录对话框 -->
     <el-dialog v-model="runDialogVisible" title="运行记录" width="1000px">
@@ -144,8 +148,19 @@ import {
   updateWorkflowStatus,
 } from '@/api/workflow'
 import type { WorkflowDef, WorkflowNodeRun, WorkflowRun } from '@/types'
+import WorkflowRevisionDialog from './WorkflowRevisionDialog.vue'
 
 const router = useRouter()
+const revisionWorkflow = ref<WorkflowDef & { id: string }>()
+
+function openRevisions(workflow: WorkflowDef) {
+  if (workflow.id) revisionWorkflow.value = { ...workflow, id: workflow.id }
+}
+
+function openDraft(id: string) {
+  revisionWorkflow.value = undefined
+  void router.push(`/workflow/edit/${id}`)
+}
 
 const loading = ref(false)
 const list = ref<WorkflowDef[]>([])
@@ -166,12 +181,12 @@ const logDialogVisible = ref(false)
 const currentLog = ref('')
 
 function runStatusText(s?: string) {
-  return { PENDING: '待运行', RUNNING: '运行中', SUCCESS: '成功', FAILED: '失败', STOP: '停止' }[s ?? ''] ?? s ?? '-'
+  return { PENDING: '待运行', RUNNING: '运行中', SUCCESS: '成功', FAILED: '失败', STOP: '停止', RECOVERY_REQUIRED: '待核查' }[s ?? ''] ?? s ?? '-'
 }
 function runStatusTag(s?: string): 'info' | 'warning' | 'success' | 'danger' {
   if (s === 'SUCCESS') return 'success'
   if (s === 'FAILED') return 'danger'
-  if (s === 'RUNNING' || s === 'PENDING') return 'warning'
+  if (s === 'RUNNING' || s === 'PENDING' || s === 'RECOVERY_REQUIRED') return 'warning'
   return 'info'
 }
 function nodeStatusText(s?: string) {

@@ -174,6 +174,7 @@
             <el-option label="开发任务 (TASK)" value="TASK" />
             <el-option label="报表 (REPORT)" value="REPORT" />
             <el-option label="数据表 (TABLE)" value="TABLE" />
+            <el-option label="数据源 (DATASOURCE)" value="DATASOURCE" />
           </el-select>
         </el-form-item>
         <el-form-item label="资源ID" required>

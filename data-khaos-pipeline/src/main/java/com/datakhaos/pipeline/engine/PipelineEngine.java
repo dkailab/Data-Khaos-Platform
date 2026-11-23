@@ -27,4 +27,11 @@ public interface PipelineEngine {
      * 同步执行一次任务，返回影响行数；抛异常表示失败。
      */
     int execute(PipelineTask task, PipelineInstance instance) throws Exception;
+
+    /** JDBC could not confirm the outcome of a transaction. A retry requires reconciliation. */
+    class CommitUnconfirmedException extends Exception {
+        public CommitUnconfirmedException(String message, Exception cause) {
+            super(message, cause);
+        }
+    }
 }

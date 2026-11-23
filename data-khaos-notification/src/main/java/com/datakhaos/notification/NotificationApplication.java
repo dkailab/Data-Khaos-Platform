@@ -3,11 +3,13 @@ package com.datakhaos.notification;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 推送系统服务
  */
 @SpringBootApplication
+@EnableScheduling
 @MapperScan("com.datakhaos.notification.mapper")
 public class NotificationApplication {
 

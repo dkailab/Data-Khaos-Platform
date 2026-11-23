@@ -1,5 +1,7 @@
 <template>
   <div class="onesql-layout" :class="{ 'theme-dark': dark }">
+    <OneSqlMaterialization v-if="materializationAsset" :asset-id="materializationAsset"
+      :biz-date="materializationDate" class="materialized-result" />
     <!-- 左侧 Schema 面板 -->
     <div class="schema-panel" :class="{ collapsed: schemaCollapsed }">
       <div class="schema-header">
@@ -187,6 +189,8 @@ import { ElMessage } from 'element-plus'
 import { CaretRight, Download, Fold, ArrowRight, Grid, Search, Star, Refresh, Cpu, Moon, Sunny } from '@element-plus/icons-vue'
 import { pageDatasources } from '@/api/datasource'
 import { executeQuery } from '@/api/query'
+import { useRoute } from 'vue-router'
+import OneSqlMaterialization from './OneSqlMaterialization.vue'
 import {
   sqlComplete, sqlFormat, sqlParse, getSchemaHints, queryHistory,
   sqlDiagnose, sqlExplain, getTableColumns,
@@ -613,6 +617,10 @@ function useHistory(row: QueryHistory) {
   databaseName.value = row.databaseName || ''
 }
 
+const route = useRoute()
+const materializationAsset = computed(() => typeof route.query.materialization === 'string' ? route.query.materialization : '')
+const materializationDate = computed(() => typeof route.query.bizDate === 'string' ? route.query.bizDate : '')
+
 // 生命周期
 onMounted(async () => {
   // 加载数据源
@@ -633,6 +641,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.onesql-layout:has(.materialized-result) { flex-wrap: wrap; height: auto; }
+.materialized-result { flex: 1 0 100%; min-width: 0; }
 /* ============ 明暗主题变量（整页跟随切换） ============ */
 .onesql-layout {
   --onesql-bg: #fff;

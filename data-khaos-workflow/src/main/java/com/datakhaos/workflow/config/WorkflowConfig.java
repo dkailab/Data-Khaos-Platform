@@ -20,7 +20,7 @@ public class WorkflowConfig {
         executor.setMaxPoolSize(8);
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("workflow-graph-");
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         return executor;
     }
 
@@ -32,7 +32,10 @@ public class WorkflowConfig {
         executor.setMaxPoolSize(16);
         executor.setQueueCapacity(200);
         executor.setThreadNamePrefix("workflow-node-");
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setRejectedExecutionHandler((task, pool) -> {
+            if (pool.isShutdown()) throw new java.util.concurrent.RejectedExecutionException("节点线程池已关闭");
+            task.run();
+        });
         executor.initialize();
         return executor;
     }
