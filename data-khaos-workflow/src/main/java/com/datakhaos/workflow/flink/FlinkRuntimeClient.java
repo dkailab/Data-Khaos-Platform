@@ -126,18 +126,19 @@ public class FlinkRuntimeClient {
         var selected = vertices.stream()
                 .filter(vertex -> vertexId == null || vertex.id().equals(vertexId))
                 .findFirst().orElse(null);
-        JsonNode snapshot = null;
+        FlinkMetricsView.Sample sample = null;
         if (selected != null && "RUNNING".equals(selected.status())) {
             String metricsPath = path + "/vertices/" + selected.id() + "/subtasks/metrics";
             // Flink 1.20 may return an empty result if any requested metric is absent.
             var metrics = FlinkMetricsView.availableMetrics(call(jobManager, "GET", metricsPath, null));
-            if (!metrics.isEmpty()) {
-                snapshot = call(jobManager, "GET", metricsPath + "?get=" + String.join(",", metrics)
+            if (!metrics.get().isEmpty()) {
+                var snapshot = call(jobManager, "GET", metricsPath + "?get=" + metrics.get()
                         + "&agg=sum,avg,max,min", null);
+                sample = FlinkMetricsView.sample(snapshot, metrics.operatorMetricsTruncated());
             }
         }
         return new FlinkMetricsView(vertices, selected == null ? null : selected.id(),
-                snapshot == null ? null : FlinkMetricsView.sample(snapshot));
+                sample);
     }
 
     public void cancel(String id) {

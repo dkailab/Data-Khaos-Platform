@@ -1,12 +1,18 @@
 package com.datakhaos.workflow.flink;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.MissingNode;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Set;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 import java.util.regex.Pattern;
 
 public record FlinkMetricsView(List<Vertex> vertices, String selectedVertexId, Sample sample) {
@@ -17,6 +23,13 @@ public record FlinkMetricsView(List<Vertex> vertices, String selectedVertexId, S
     private static final String BUSY = "busyTimeMsPerSecond";
     private static final String IDLE = "idleTimeMsPerSecond";
     private static final String WATERMARK = "currentInputWatermark";
+    private static final String OPERATOR_INPUT = "." + WATERMARK;
+    private static final String OPERATOR_OUTPUT = ".currentOutputWatermark";
+    private static final String KAFKA_LAG = ".KafkaSourceReader.KafkaConsumer.records-lag-max";
+    private static final String PENDING = ".pendingRecords";
+    private static final List<String> OPERATOR_SUFFIXES = List.of(OPERATOR_INPUT, OPERATOR_OUTPUT, KAFKA_LAG, PENDING);
+    // Leave room for the Flink REST path and HTTP request line.
+    private static final int MAX_QUERY_LENGTH = 2800;
     private static final List<String> METRICS = List.of(INPUT, OUTPUT, PRESSURE, BUSY, IDLE, WATERMARK);
 
     static List<Vertex> vertices(JsonNode job) {
@@ -33,19 +46,37 @@ public record FlinkMetricsView(List<Vertex> vertices, String selectedVertexId, S
         return List.copyOf(vertices);
     }
 
-    static List<String> availableMetrics(JsonNode response) {
+    static MetricQuery availableMetrics(JsonNode response) {
         if (!response.isArray()) {
             throw new FlinkRuntimeClient.RuntimeFailure("Flink 未返回有效指标列表");
         }
         Set<String> available = new HashSet<>();
         response.forEach(metric -> available.add(metric.path("id").asText()));
-        return METRICS.stream().filter(available::contains).toList();
+        var query = new ArrayList<String>();
+        METRICS.stream().filter(available::contains).forEach(query::add);
+        int length = String.join(",", query).length();
+        boolean truncated = false;
+        for (String id : available.stream().filter(metric -> operatorSuffix(metric) != null).sorted().toList()) {
+            if (id.indexOf(',') >= 0 || id.codePoints().anyMatch(Character::isISOControl)) {
+                truncated = true;
+                continue;
+            }
+            String encoded = URLEncoder.encode(id, StandardCharsets.UTF_8);
+            if (length + encoded.length() + 1 > MAX_QUERY_LENGTH) {
+                truncated = true;
+                continue;
+            }
+            query.add(encoded);
+            length += encoded.length() + 1;
+        }
+        return new MetricQuery(String.join(",", query), truncated);
     }
 
-    static Sample sample(JsonNode response) {
+    static Sample sample(JsonNode response, boolean operatorMetricsTruncated) {
         if (!response.isArray()) {
             throw new FlinkRuntimeClient.RuntimeFailure("Flink 未返回有效指标样本");
         }
+        Map<String, Map<String, JsonNode>> operatorGauges = new TreeMap<>();
         Double in = null;
         Double out = null;
         Double pressure = null;
@@ -53,20 +84,49 @@ public record FlinkMetricsView(List<Vertex> vertices, String selectedVertexId, S
         Double idle = null;
         Instant watermark = null;
         for (JsonNode metric : response) {
-            switch (metric.path("id").asText()) {
+            String id = metric.path("id").asText();
+            switch (id) {
                 case INPUT -> in = bounded(metric.path("sum"), Double.MAX_VALUE);
                 case OUTPUT -> out = bounded(metric.path("sum"), Double.MAX_VALUE);
                 case PRESSURE -> pressure = bounded(metric.path("max"), 1000);
                 case BUSY -> busy = bounded(metric.path("avg"), 1000);
                 case IDLE -> idle = bounded(metric.path("avg"), 1000);
                 case WATERMARK -> watermark = watermark(metric.path("min"));
-                default -> { }
+                default -> {
+                    String suffix = operatorSuffix(id);
+                    if (suffix != null) {
+                        String operator = id.substring(0, id.length() - suffix.length());
+                        operatorGauges.computeIfAbsent(operator, ignored -> new HashMap<>()).put(suffix, metric);
+                    }
+                }
             }
         }
-        if (in == null && out == null && pressure == null && busy == null && idle == null && watermark == null) {
+        var operators = operatorGauges.entrySet().stream()
+                .map(entry -> operator(entry.getKey(), entry.getValue()))
+                .toList();
+        if (in == null && out == null && pressure == null && busy == null && idle == null && watermark == null
+                && operators.isEmpty() && !operatorMetricsTruncated) {
             return null;
         }
-        return new Sample(Instant.now(), in, out, pressure, busy, idle, watermark);
+        return new Sample(Instant.now(), in, out, pressure, busy, idle, watermark, operators, operatorMetricsTruncated);
+    }
+
+    private static String operatorSuffix(String id) {
+        for (String suffix : OPERATOR_SUFFIXES) {
+            if (id.length() > suffix.length() && id.endsWith(suffix)) return suffix;
+        }
+        return null;
+    }
+
+    private static OperatorMetrics operator(String name, Map<String, JsonNode> gauges) {
+        JsonNode unknown = MissingNode.getInstance();
+        JsonNode pending = gauges.getOrDefault(PENDING, unknown);
+        Double pendingRecords = bounded(pending.path("min"), Double.MAX_VALUE) == null
+                ? null : bounded(pending.path("sum"), Double.MAX_VALUE);
+        return new OperatorMetrics(name,
+                watermark(gauges.getOrDefault(OPERATOR_INPUT, unknown).path("min")),
+                watermark(gauges.getOrDefault(OPERATOR_OUTPUT, unknown).path("min")),
+                bounded(gauges.getOrDefault(KAFKA_LAG, unknown).path("max"), Double.MAX_VALUE), pendingRecords);
     }
 
     private static Double bounded(JsonNode node, double limit) {
@@ -85,9 +145,15 @@ public record FlinkMetricsView(List<Vertex> vertices, String selectedVertexId, S
                 ? Instant.ofEpochMilli((long) millis) : null;
     }
 
+    record MetricQuery(String get, boolean operatorMetricsTruncated) {}
+
+    public record OperatorMetrics(String name, Instant inputWatermark, Instant outputWatermark,
+                                  Double kafkaMaxLag, Double pendingRecords) {}
+
     public record Vertex(String id, String name, String status, int parallelism) {}
 
     public record Sample(Instant sampledAt, Double recordsInPerSecond, Double recordsOutPerSecond,
                          Double maxBackpressureMsPerSecond, Double avgBusyMsPerSecond,
-                         Double avgIdleMsPerSecond, Instant inputWatermark) {}
+                         Double avgIdleMsPerSecond, Instant inputWatermark, List<OperatorMetrics> operators,
+                         boolean operatorMetricsTruncated) {}
 }
