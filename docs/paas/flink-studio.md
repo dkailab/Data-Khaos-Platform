@@ -84,3 +84,9 @@ flowchart LR
 `GET /runs/{runId}/metrics` 返回 `vertices`、`selectedVertexId` 和 `sample`。可选参数 `vertexId` 只接受该运行的执行节点 ID，缺省选第一个节点。访问要求与检查点一致。每次请求只读取所选节点的聚合样本。吞吐为可用子任务的速率之和，反压取最大值，忙碌和空闲取平均值，输入水位线取最小值。无样本的指标显示为「—」，实际零值正常展示。查询时间为平台读取样本的时间。 [Flink 指标说明](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/metrics/)
 
 「算子指标」按 Flink 算子名展示最慢输入和输出水位线。支持的源连接器展示待取记录数，汇总可用子任务的 `pendingRecords`。Kafka 源还展示最大分区积压，取各子任务 `records-lag-max` 的最大值。该值基于消费者当前读取偏移表示采样窗口内最慢分区的积压，消费组已提交偏移需另行查询。水位线与积压不可用时显示「—」。长算子链可能只展示部分算子指标，页面会提示。 [Flink Kafka 指标](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/connectors/datastream/kafka/#monitoring) · [Kafka 消费指标](https://kafka.apache.org/39/operations/monitoring/#consumer-monitoring)
+
+### 发布前对比与运行诊断
+
+在历史版本详情选择「对比版本」，可选同一资产的任意其他版本。页面并排展示有变化的作业 SQL、运行配置及函数依赖，或函数注册定义。查看历史版本时默认对比打开该版本时查到的最新版本，查看最新版本时默认对比上一版。
+
+运行指标展示节点输入和算子输出的水位线滞后，取该次指标查询时间与水位线的差。刷新后，页面提示同一节点连续两个可用样本的输入水位线是否保持不变。检查点面板在最近一次失败晚于最近完成记录或未查到完成记录时给出提示。运行指标可在面板内开启每 10 秒自动刷新。切换执行节点后重新取样，关闭面板会停止采样。读取失败会暂停自动刷新，手动刷新成功后恢复。检查点继续按需读取。

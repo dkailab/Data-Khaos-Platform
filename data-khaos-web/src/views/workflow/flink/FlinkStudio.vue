@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DkButton from '@/paas-ui/DkButton.vue'
 import DkPageHeader from '@/paas-ui/DkPageHeader.vue'
+import FlinkVersionCompare from './FlinkVersionCompare.vue'
 import FlinkRunsPanel from './FlinkRunsPanel.vue'
 import { listMyProjectWorkspaces, type ProjectWorkspace } from '@/api/project-group'
 import {
@@ -48,6 +49,7 @@ const versionWorking = ref(false)
 const historyError = ref('')
 const exporting = ref(false)
 const runsOpen = ref(false)
+const compareOpen = ref(false)
 const canRun = computed(() => projects.value.find(row => row.projectGroupId === project.value)
   ?.capabilities.includes('task:schedule') ?? false)
 let historySequence = 0
@@ -173,6 +175,7 @@ async function save() {
 
 async function openHistory(row: FlinkAsset) {
   viewedAsset.value = row
+  compareOpen.value = false
   selected.value = undefined
   runsOpen.value = false
   history.value = []
@@ -203,6 +206,7 @@ async function viewVersion(version: number) {
   const row = viewedAsset.value
   if (!row) return
   const sequence = ++selectionSequence
+  compareOpen.value = false
   selected.value = undefined
   versionWorking.value = true
   historyError.value = ''
@@ -220,6 +224,7 @@ function closeHistory() {
   historySequence++
   selectionSequence++
   viewedAsset.value = undefined
+  compareOpen.value = false
   selected.value = undefined
   runsOpen.value = false
   versionWorking.value = false
@@ -392,6 +397,7 @@ onMounted(() => void loadProjects())
         <div class="asset-tools">
           <h3>v{{ selected.revision.version }} · {{ selected.revision.name }}</h3>
           <div class="asset-actions">
+            <DkButton v-if="selected.currentVersion > 1" :disabled="versionWorking" @click="compareOpen = true">对比版本</DkButton>
             <DkButton v-if="selected.kind === 'JOB'" :aria-expanded="runsOpen" @click="runsOpen = !runsOpen">
               {{ runsOpen ? '收起运行记录' : '运行与记录' }}
             </DkButton>
@@ -416,6 +422,8 @@ onMounted(() => void loadProjects())
         </dl>
       </section>
     </el-dialog>
+    <FlinkVersionCompare v-if="compareOpen && selected" :project="project" :base="selected"
+      @close="compareOpen = false" />
   </div>
 </template>
 

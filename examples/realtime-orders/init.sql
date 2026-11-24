@@ -50,6 +50,5 @@ CREATE TABLE orders_serving.ads_region_day (
   PRIMARY KEY (biz_date, region)
 ) ENGINE=InnoDB;
 
--- Batch reconciliation uses a fixed snapshot and its own serving table.
-CREATE TABLE orders_serving.batch_order_snapshot LIKE orders_source.orders;
+-- Published results from bounded batch reconciliation.
 CREATE TABLE orders_serving.ads_region_day_batch LIKE orders_serving.ads_region_day;

@@ -32,6 +32,17 @@ const summaries = computed(() => [
   ['进行中', view.value?.counts?.inProgress],
   ['恢复次数', view.value?.counts?.restored],
 ])
+const recoveryStatus = computed(() => {
+  const completed = view.value?.latestCompleted
+  const failed = view.value?.latestFailed
+  if (failed && (!completed || failed.id > completed.id)) {
+    const point = failed.savepoint ? '保存点' : '检查点'
+    const detail = completed ? '最近完成的记录早于本次失败。' : '当前未查到已完成记录。'
+    return { type: 'warning' as const, text: `${point} #${failed.id} 失败。${detail}` }
+  }
+  if (!completed) return { type: 'info' as const, text: '当前未查到已完成记录。' }
+  return undefined
+})
 const labels = { COMPLETED: '已完成', FAILED: '失败', IN_PROGRESS: '进行中' } as const
 const formatter = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'medium' })
 
@@ -52,6 +63,7 @@ function time(value?: string | null) {
       <dl class="checkpoint-summary">
         <div v-for="[label, count] in summaries" :key="label"><dt>{{ label }}</dt><dd>{{ count ?? '—' }}</dd></div>
       </dl>
+      <el-alert v-if="recoveryStatus" :type="recoveryStatus.type" :title="recoveryStatus.text" :closable="false" show-icon />
       <p v-if="view.latestCompleted">最近完成 #{{ view.latestCompleted.id }} · {{ time(view.latestCompleted.triggeredAt) }} 触发</p>
       <p v-if="view.latestFailed">最近失败 #{{ view.latestFailed.id }} · {{ time(view.latestFailed.triggeredAt) }} 触发</p>
       <p v-if="view.latestRestore">最近恢复自{{ view.latestRestore.savepoint ? '保存点' : '检查点' }}

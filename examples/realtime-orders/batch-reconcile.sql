@@ -1,4 +1,4 @@
-SET 'pipeline.name' = 'Orders bounded reconciliation';
+SET 'pipeline.name' = 'Orders bounded reconciliation @@RUN_ID@@';
 SET 'execution.runtime-mode' = 'batch';
 SET 'parallelism.default' = '1';
 SET 'table.local-time-zone' = 'Asia/Shanghai';
@@ -15,7 +15,7 @@ CREATE TABLE batch_order_snapshot (
 ) WITH (
   'connector' = 'jdbc',
   'url' = 'jdbc:mysql://mysql:3306/orders_serving?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC',
-  'table-name' = 'batch_order_snapshot',
+  'table-name' = 'batch_snapshot_@@RUN_ID@@',
   'username' = 'ads_writer',
   'password' = 'local-orders-ads'
 );
@@ -34,7 +34,7 @@ CREATE TABLE ads_region_day_batch (
 ) WITH (
   'connector' = 'jdbc',
   'url' = 'jdbc:mysql://mysql:3306/orders_serving?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC',
-  'table-name' = 'ads_region_day_batch',
+  'table-name' = 'batch_ads_@@RUN_ID@@',
   'username' = 'ads_writer',
   'password' = 'local-orders-ads'
 );

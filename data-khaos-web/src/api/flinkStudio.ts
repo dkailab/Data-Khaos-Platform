@@ -74,8 +74,8 @@ export function listFlinkVersions(project: string, id: string, current: number, 
   return get<PageResult<FlinkRevision>>(`${asset(project, id)}/versions`, { current, size })
 }
 
-export function getFlinkVersion(project: string, id: string, version: number) {
-  return get<FlinkVersionView>(revision(project, id, version))
+export function getFlinkVersion(project: string, id: string, version: number, signal?: AbortSignal) {
+  return get<FlinkVersionView>(revision(project, id, version), undefined, { signal })
 }
 
 export function restoreFlinkVersion(project: string, id: string, version: number, expectedVersion: number, note: string) {
