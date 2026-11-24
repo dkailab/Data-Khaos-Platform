@@ -82,6 +82,25 @@ watch([requested, attempt], async (_, __, onCleanup) => {
         <dl class="metrics-cards">
           <div v-for="card in cards" :key="card.label"><dt>{{ card.label }}</dt><dd>{{ card.value }}</dd></div>
         </dl>
+        <section v-if="sample.operators?.length" class="operator-metrics" aria-labelledby="flink-operator-metrics">
+          <h3 id="flink-operator-metrics">算子指标</h3>
+          <el-table :data="sample.operators" row-key="name" size="small">
+            <el-table-column prop="name" label="算子" min-width="135" show-overflow-tooltip />
+            <el-table-column label="输入水位线" min-width="134">
+              <template #default="{ row }">{{ time(row.inputWatermark) }}</template>
+            </el-table-column>
+            <el-table-column label="输出水位线" min-width="134">
+              <template #default="{ row }">{{ time(row.outputWatermark) }}</template>
+            </el-table-column>
+            <el-table-column label="源端待取" min-width="100">
+              <template #default="{ row }">{{ format(row.pendingRecords, '条') }}</template>
+            </el-table-column>
+            <el-table-column label="Kafka 最大分区积压" min-width="150">
+              <template #default="{ row }">{{ format(row.kafkaMaxLag, '条') }}</template>
+            </el-table-column>
+          </el-table>
+        </section>
+        <p v-if="sample.operatorMetricsTruncated" class="metrics-meta">此节点仅展示部分算子指标。</p>
         <p class="metrics-meta">吞吐汇总可用子任务样本。— 表示该指标暂无样本。</p>
       </template>
     </template>
@@ -99,6 +118,8 @@ watch([requested, attempt], async (_, __, onCleanup) => {
   gap: var(--dk-space-2);
   margin: 0;
 }
+.operator-metrics { margin-top: var(--dk-space-4); min-width: 0; }
+.operator-metrics h3 { font-size: 15px; margin: 0 0 var(--dk-space-2); }
 .metrics-cards div { background: var(--dk-soft); border-radius: 8px; padding: 12px; }
 .metrics-cards dd { font-size: 17px; font-weight: 650; margin: 4px 0 0; }
 </style>

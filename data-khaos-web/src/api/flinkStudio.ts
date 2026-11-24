@@ -160,6 +160,14 @@ export interface FlinkMetricsView {
     avgBusyMsPerSecond: number | null
     avgIdleMsPerSecond: number | null
     inputWatermark: string | null
+    operators?: {
+      name: string
+      inputWatermark: string | null
+      outputWatermark: string | null
+      kafkaMaxLag: number | null
+      pendingRecords: number | null
+    }[]
+    operatorMetricsTruncated?: boolean
   } | null
 }
 
