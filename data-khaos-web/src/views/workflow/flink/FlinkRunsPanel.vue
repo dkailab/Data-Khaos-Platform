@@ -9,6 +9,7 @@ import type { FlinkRun, FlinkRunState } from '@/api/flinkStudio'
 
 const props = defineProps<{ project: string; assetId: string; version: number; canRun: boolean; streaming: boolean }>()
 const runs = ref<FlinkRun[]>([])
+const activeRun = ref<FlinkRun | null>(null)
 const enabled = ref(false)
 const total = ref(0)
 const current = ref(1)
@@ -22,7 +23,11 @@ let sequence = 0
 let requestId = ''
 const recoveryRequests = new Map<string, string>()
 let closed = false
-const active = computed(() => runs.value.some(row => !terminal(row.state)))
+const canStart = computed(() => enabled.value && props.canRun && !loading.value && !working.value && !activeRun.value)
+const activeOutsidePage = computed(() => {
+  const row = activeRun.value
+  return row && !runs.value.some(item => item.id === row.id) ? row : null
+})
 
 const labels: Record<FlinkRunState, string> = {
   PREPARING: '准备中', SUBMITTING: '提交中', RECONCILING: '待核查', SUBMITTED: '引擎已受理',
@@ -50,11 +55,16 @@ async function load() {
     if (token !== sequence) return
     enabled.value = response.enabled
     runs.value = response.page.records
+    activeRun.value = response.activeRun === undefined
+      ? runs.value.find(row => !terminal(row.state)) ?? null
+      : response.activeRun
     total.value = Number(response.page.total)
   } catch (e) {
     if (token === sequence) {
       enabled.value = false
       runs.value = []
+      activeRun.value = null
+      total.value = 0
       error.value = e instanceof Error ? e.message : '无法加载运行记录'
     }
   } finally {
@@ -63,7 +73,7 @@ async function load() {
 }
 
 async function submit() {
-  if (working.value || !enabled.value || !props.canRun) return
+  if (!canStart.value) return
   const version = props.version
   try {
     await ElMessageBox.confirm(`提交 v${version} 到绑定的 Flink 集群。`, '提交 Flink 作业', {
@@ -72,7 +82,7 @@ async function submit() {
   } catch {
     return
   }
-  if (closed || version !== props.version) return
+  if (closed || version !== props.version || !canStart.value) return
   const key = requestId || (requestId = newRequestId())
   working.value = true
   error.value = ''
@@ -91,7 +101,7 @@ async function submit() {
 }
 
 async function recover(row: FlinkRun) {
-  if (working.value || active.value || !row.recoverable) return
+  if (!canStart.value || !row.recoverable) return
   const key = recoveryRequests.get(row.id) ?? newRequestId()
   recoveryRequests.set(row.id, key)
   working.value = true
@@ -112,7 +122,7 @@ async function recover(row: FlinkRun) {
 }
 
 async function update(row: FlinkRun, action: 'refresh' | 'cancel' | 'stop') {
-  if (working.value) return
+  if (working.value || loading.value) return
   if (action !== 'refresh') {
     const savepoint = action === 'stop'
     try {
@@ -124,13 +134,13 @@ async function update(row: FlinkRun, action: 'refresh' | 'cancel' | 'stop') {
       return
     }
   }
-  if (closed) return
+  if (closed || working.value || loading.value) return
   working.value = true
   error.value = ''
   try {
     const api = { refresh: refreshFlinkRun, cancel: cancelFlinkRun, stop: stopFlinkRun }[action]
-    const updated = await api(props.project, props.assetId, row.id)
-    if (!closed) runs.value = runs.value.map(item => item.id === updated.id ? updated : item)
+    await api(props.project, props.assetId, row.id)
+    if (!closed) await load()
   } catch (e) {
     if (!closed) error.value = e instanceof Error ? e.message : '运行操作失败'
   } finally {
@@ -138,8 +148,20 @@ async function update(row: FlinkRun, action: 'refresh' | 'cancel' | 'stop') {
   }
 }
 
+const pendingSubmission = computed(() => {
+  const row = activeRun.value
+  return row && ['SUBMITTING', 'RECONCILING'].includes(row.state) ? row : null
+})
+
+watch([pendingSubmission, enabled, loading, working, error], ([row, bound, busy, changing, failed], _, onCleanup) => {
+  if (!row || !bound || busy || changing || failed) return
+  const timer = window.setTimeout(() => { void update(row, 'refresh') }, 10_000)
+  onCleanup(() => window.clearTimeout(timer))
+}, { immediate: true })
+
 watch(() => props.version, () => { requestId = '' })
 watch([() => props.project, () => props.assetId], () => {
+  current.value = 1
   checkpointRun.value = undefined
   metricsRun.value = undefined
   void load()
@@ -152,13 +174,21 @@ onBeforeUnmount(() => { sequence++; closed = true })
     <header class="runs-actions">
       <h3>运行记录</h3>
       <DkButton :loading="loading" :disabled="working" @click="load">刷新列表</DkButton>
-      <DkButton variant="primary" :disabled="!enabled || !canRun || active || loading" :loading="working" @click="submit">
+      <DkButton variant="primary" :disabled="!canStart" :loading="working" @click="submit">
         提交 v{{ version }}
       </DkButton>
     </header>
     <el-alert v-if="error" type="error" :title="error" :closable="false" show-icon />
     <p v-else-if="!loading && !enabled" class="runs-hint">当前项目未绑定 Flink 运行集群。</p>
     <p v-else-if="!canRun" class="runs-hint">提交及取消需要项目调度权限。</p>
+    <p v-if="pendingSubmission && enabled && !error" class="runs-hint">
+      正在核查版本 v{{ pendingSubmission.version }} 的提交结果。
+    </p>
+    <div v-if="activeOutsidePage" class="runs-active">
+      <span>活动运行 v{{ activeOutsidePage.version }} · {{ labels[activeOutsidePage.state] }}</span>
+      <el-button link type="primary" :disabled="working || loading || !enabled"
+        @click="update(activeOutsidePage, 'refresh')">刷新活动运行</el-button>
+    </div>
     <el-table v-loading="loading" :data="runs" row-key="id" empty-text="暂无作业运行">
       <el-table-column label="版本" width="72"><template #default="{ row }">v{{ row.version }}</template></el-table-column>
       <el-table-column label="状态" min-width="108">
@@ -180,7 +210,7 @@ onBeforeUnmount(() => { sequence++; closed = true })
             link type="danger" :disabled="working" @click="update(row, 'cancel')">取消</el-button>
           <el-button v-if="canRun && streaming && row.version === version && ['SUBMITTED', 'STOP_REQUESTED'].includes(row.state) && row.engineJobId"
             link type="primary" :disabled="working" @click="update(row, 'stop')">保存停机</el-button>
-          <el-button v-if="canRun && enabled && row.recoverable" link type="primary" :disabled="working || active"
+          <el-button v-if="canRun && enabled && row.recoverable" link type="primary" :disabled="!canStart"
             @click="recover(row)">从断点恢复</el-button>
         </template>
       </el-table-column>
@@ -190,7 +220,7 @@ onBeforeUnmount(() => { sequence++; closed = true })
     <FlinkMetricsDialog v-if="metricsRun" :key="metricsRun" :project="project" :asset-id="assetId"
       :run-id="metricsRun" @close="metricsRun = undefined" />
     <el-pagination v-if="total > size" v-model:current-page="current" :page-size="size" :total="total"
-      layout="prev, pager, next" @current-change="load" />
+      :disabled="working" layout="prev, pager, next" @current-change="load" />
   </section>
 </template>
 
@@ -198,5 +228,6 @@ onBeforeUnmount(() => { sequence++; closed = true })
 .runs-panel { margin-top: var(--dk-space-4); min-width: 0; }
 .runs-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--dk-space-2); }
 .runs-actions h3 { margin: 0 auto 0 0; }
+.runs-active { display: flex; align-items: center; flex-wrap: wrap; gap: var(--dk-space-2); }
 .runs-hint { color: var(--dk-muted); }
 </style>

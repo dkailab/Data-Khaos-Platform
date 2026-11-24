@@ -17,6 +17,7 @@ import com.datakhaos.workflow.flink.FlinkRunView;
 import com.datakhaos.workflow.flink.FlinkRuntimeClient;
 import com.datakhaos.workflow.flink.FlinkRuntimeClient.EngineJob;
 import com.datakhaos.workflow.flink.FlinkRuntimeClient.RuntimeFailure;
+import com.datakhaos.workflow.flink.FlinkRuntimeClient.SubmitNotSent;
 import com.datakhaos.workflow.mapper.FlinkAssetMapper;
 import com.datakhaos.workflow.mapper.FlinkDeploymentMapper;
 import lombok.RequiredArgsConstructor;
@@ -54,8 +55,12 @@ public class FlinkDeploymentService {
         var page = runs.selectPage(new Page<>(current, size), Wrappers.<FlinkDeployment>lambdaQuery()
                 .eq(FlinkDeployment::getProjectId, project).eq(FlinkDeployment::getAssetId, assetId)
                 .orderByDesc(FlinkDeployment::getCreateTime, FlinkDeployment::getId));
+        FlinkDeployment active = runs.selectOne(Wrappers.<FlinkDeployment>lambdaQuery()
+                .eq(FlinkDeployment::getProjectId, project).eq(FlinkDeployment::getAssetId, assetId)
+                .eq(FlinkDeployment::getActiveAssetId, assetId));
         return new RunPage(runtime.enabled(project), PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(),
-                page.getRecords().stream().map(FlinkRunView::of).toList()));
+                page.getRecords().stream().map(FlinkRunView::of).toList()),
+                active == null ? null : FlinkRunView.of(active));
     }
 
     public FlinkRunView submit(String project, String assetId, int version, String inputKey) {
@@ -107,13 +112,21 @@ public class FlinkDeploymentService {
             run.setState(State.SUBMITTING);
             run.setRowVersion(run.getRowVersion() + 1);
             close = false;
-            Optional<String> jobId = runtime.insert(session, script.insert(), deadline);
+            String operation = runtime.submitInsert(session, script.insert(), deadline);
+            run.setGatewaySessionHandle(session);
+            run.setGatewayOperationHandle(operation);
+            if (!transition(run, State.SUBMITTING, null, null, null)) return reload(run);
+            run.setRowVersion(run.getRowVersion() + 1);
+
+            Optional<String> jobId = runtime.awaitJobId(session, operation, deadline);
             if (jobId.isPresent()) {
-                close = true;
-                transition(run, State.SUBMITTED, jobId.get(), null, null);
+                close = transition(run, State.SUBMITTED, jobId.get(), null, null);
             } else {
                 transition(run, State.RECONCILING, null, null, "Flink 提交结果待确认，请刷新运行");
             }
+        } catch (SubmitNotSent e) {
+            close = true;
+            transition(run, State.FAILED, null, null, e.getMessage());
         } catch (RuntimeFailure e) {
             if (run.getState() == State.PREPARING) {
                 transition(run, State.FAILED, null, null, e.getMessage());
@@ -121,13 +134,7 @@ public class FlinkDeploymentService {
                 transition(run, State.RECONCILING, null, null, "Flink 提交结果待确认，请刷新运行");
             }
         } finally {
-            if (session != null && close) {
-                try {
-                    runtime.close(session);
-                } catch (RuntimeFailure ignored) {
-                    // The gateway expires idle sessions. The persisted run state remains authoritative.
-                }
-            }
+            if (close) closeSession(session);
         }
         return reload(run);
     }
@@ -145,8 +152,9 @@ public class FlinkDeploymentService {
         }
         try {
             if (run.getState() == State.STOP_REQUESTED) return refreshStop(run);
-            Optional<EngineJob> observed = run.getEngineJobId() == null
-                    ? runtime.findByName(engineName(run)) : Optional.of(runtime.job(run.getEngineJobId()));
+            Optional<EngineJob> receipt = run.getEngineJobId() == null ? jobFromGatewayReceipt(run) : Optional.empty();
+            Optional<EngineJob> observed = receipt.isPresent() ? receipt : (run.getEngineJobId() == null
+                    ? runtime.findByName(engineName(run)) : Optional.of(runtime.job(run.getEngineJobId())));
             if (observed.isPresent()) {
                 EngineJob job = observed.get();
                 if (run.getEngineJobId() != null && !run.getEngineJobId().equals(job.id())) {
@@ -158,7 +166,9 @@ public class FlinkDeploymentService {
                     case "CANCELED" -> State.CANCELED;
                     default -> run.getState() == State.CANCEL_REQUESTED ? State.CANCEL_REQUESTED : State.SUBMITTED;
                 };
-                transition(run, state, job.id(), job.status(), null);
+                if (transition(run, state, job.id(), job.status(), null) && receipt.isPresent()) {
+                    closeSession(run.getGatewaySessionHandle());
+                }
             } else if (run.getState() == State.SUBMITTING
                     && run.getUpdateTime().isBefore(LocalDateTime.now().minusMinutes(2))) {
                 transition(run, State.RECONCILING, null, null, "Flink 提交结果待确认，请刷新运行");
@@ -166,6 +176,39 @@ public class FlinkDeploymentService {
             return reload(run);
         } catch (RuntimeFailure e) {
             throw new BusinessException(ResultCode.SYSTEM_ERROR, e.getMessage());
+        }
+    }
+
+    private Optional<EngineJob> jobFromGatewayReceipt(FlinkDeployment run) {
+        if (run.getGatewaySessionHandle() != null && run.getGatewayOperationHandle() != null) {
+            Optional<String> id;
+            try {
+                id = runtime.submissionResult(run.getGatewaySessionHandle(), run.getGatewayOperationHandle()).jobId();
+            } catch (RuntimeFailure ignored) {
+                // A lost gateway session does not prove the INSERT was rejected.
+                id = Optional.empty();
+            }
+            if (id.isPresent()) {
+                String jobId = id.get();
+                EngineJob job;
+                try {
+                    job = runtime.job(jobId);
+                } catch (RuntimeFailure ignored) {
+                    return Optional.of(new EngineJob(jobId, "UNKNOWN"));
+                }
+                if (!jobId.equals(job.id())) throw new RuntimeFailure("Flink 返回的运行 ID 不匹配");
+                return Optional.of(job);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private void closeSession(String session) {
+        if (session == null) return;
+        try {
+            runtime.close(session);
+        } catch (RuntimeFailure ignored) {
+            // The gateway expires idle sessions. The persisted run state remains authoritative.
         }
     }
 
@@ -300,11 +343,14 @@ public class FlinkDeploymentService {
 
     private boolean update(FlinkDeployment run, State state, String jobId, String engineState, String message,
                            String triggerId, String path) {
+        boolean retainHandles = state == State.SUBMITTING || state == State.RECONCILING;
         return runs.update(null, Wrappers.<FlinkDeployment>lambdaUpdate()
                 .eq(FlinkDeployment::getId, run.getId()).eq(FlinkDeployment::getRowVersion, run.getRowVersion())
                 .set(FlinkDeployment::getRowVersion, run.getRowVersion() + 1)
                 .set(FlinkDeployment::getState, state).set(FlinkDeployment::getEngineJobId, jobId)
                 .set(FlinkDeployment::getEngineState, engineState).set(FlinkDeployment::getMessage, message)
+                .set(FlinkDeployment::getGatewaySessionHandle, retainHandles ? run.getGatewaySessionHandle() : null)
+                .set(FlinkDeployment::getGatewayOperationHandle, retainHandles ? run.getGatewayOperationHandle() : null)
                 .set(FlinkDeployment::getSavepointTriggerId, triggerId).set(FlinkDeployment::getSavepointPath, path)
                 .set(FlinkDeployment::getActiveAssetId, state.terminal() ? null : run.getAssetId())
                 .set(FlinkDeployment::getUpdateTime, LocalDateTime.now())) == 1;
@@ -365,5 +411,5 @@ public class FlinkDeploymentService {
         return "dk-flink-" + run.getId();
     }
 
-    public record RunPage(boolean enabled, PageResult<FlinkRunView> page) {}
+    public record RunPage(boolean enabled, PageResult<FlinkRunView> page, FlinkRunView activeRun) {}
 }

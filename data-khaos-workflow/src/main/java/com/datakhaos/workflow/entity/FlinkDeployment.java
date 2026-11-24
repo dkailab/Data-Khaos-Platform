@@ -19,6 +19,8 @@ public class FlinkDeployment extends BaseEntity {
     private String clusterKey;
     private State state;
     private Integer rowVersion;
+    private String gatewaySessionHandle;
+    private String gatewayOperationHandle;
     private String engineJobId;
     private String engineState;
     private String savepointTriggerId;

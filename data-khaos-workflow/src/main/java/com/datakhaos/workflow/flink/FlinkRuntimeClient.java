@@ -71,20 +71,29 @@ public class FlinkRuntimeClient {
         throw unavailable("Flink 准备语句处理超时");
     }
 
-    public Optional<String> insert(String session, String statement, long deadline) {
-        String operation = execute(session, statement);
-        String path = sessionPath(session) + "/operations/" + operation + "/result/0?rowFormat=JSON";
+    public String submitInsert(String session, String statement, long deadline) {
+        if (!before(deadline)) throw new SubmitNotSent();
+        return execute(session, statement);
+    }
+
+    public Optional<String> awaitJobId(String session, String operation, long deadline) {
         while (before(deadline)) {
-            JsonNode result = call(sqlGateway, "GET", path, null);
-            String id = result.path("jobID").asText();
-            if (!JOB_ID.matcher(id).matches()) {
-                id = result.path("results").path("data").path(0).path("fields").path(0).asText();
-            }
-            if (JOB_ID.matcher(id).matches()) return Optional.of(id);
-            if (!"NOT_READY".equals(result.path("resultType").asText())) return Optional.empty();
+            SubmissionResult result = submissionResult(session, operation);
+            if (!result.pending()) return result.jobId();
             pause();
         }
         return Optional.empty();
+    }
+
+    public SubmissionResult submissionResult(String session, String operation) {
+        String path = sessionPath(session) + "/operations/" + normalizeHandle(operation) + "/result/0?rowFormat=JSON";
+        JsonNode result = call(sqlGateway, "GET", path, null);
+        String id = result.path("jobID").asText();
+        if (!JOB_ID.matcher(id).matches()) {
+            id = result.path("results").path("data").path(0).path("fields").path(0).asText();
+        }
+        if (JOB_ID.matcher(id).matches()) return new SubmissionResult(Optional.of(id), false);
+        return new SubmissionResult(Optional.empty(), "NOT_READY".equals(result.path("resultType").asText()));
     }
 
     public void close(String session) {
@@ -179,15 +188,19 @@ public class FlinkRuntimeClient {
     }
 
     private String handle(JsonNode node, String key) {
+        return normalizeHandle(node.path(key).asText());
+    }
+
+    private String normalizeHandle(String value) {
         try {
-            return UUID.fromString(node.path(key).asText()).toString();
+            return UUID.fromString(value).toString();
         } catch (IllegalArgumentException e) {
             throw unavailable("Flink Gateway 未返回有效操作标识");
         }
     }
 
     private String sessionPath(String handle) {
-        return "/v2/sessions/" + UUID.fromString(handle);
+        return "/v2/sessions/" + normalizeHandle(handle);
     }
 
     private JsonNode call(String base, String method, String path, Object input) {
@@ -238,9 +251,17 @@ public class FlinkRuntimeClient {
         return new RuntimeFailure(message);
     }
 
+    public record SubmissionResult(Optional<String> jobId, boolean pending) {}
+
     public record Savepoint(boolean completed, String location) {}
 
     public record EngineJob(String id, String status) {}
+
+    public static final class SubmitNotSent extends RuntimeFailure {
+        private SubmitNotSent() {
+            super("提交时限已用尽，未发送作业写入语句");
+        }
+    }
 
     public static class RuntimeFailure extends RuntimeException {
         public RuntimeFailure(String message) {

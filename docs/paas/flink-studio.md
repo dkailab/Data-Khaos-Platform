@@ -49,18 +49,22 @@ flowchart LR
 
 有开发和调度权限的项目成员可在作业历史中选择固定版本并提交。管理员通过部署配置将一个项目绑定到专用 SQL Gateway 和 JobManager REST。默认关闭。SQL Gateway 只接收该项目审核信任的开发人员提交的 SQL。专用运行环境使用独立身份、连接器、制品访问和网络范围。
 
-首版接收会话内的 `CREATE TEMPORARY TABLE/VIEW/FUNCTION`、受支持的 `SET` 和最后一条 `INSERT INTO`。在现有历史版本界面可查看运行记录、引擎 Job ID 和最新状态。集群绑定确认后，在 workflow 服务配置 `FLINK_RUN_PROJECT_ID`、`FLINK_RUN_SQL_GATEWAY`（如 `http://flink-sql-gateway:8083`）和 `FLINK_RUN_JOBMANAGER`（如 `http://flink-jobmanager:8081`）。先执行 `db/migrate-flink-deployment.sql`。
+首版接收会话内的 `CREATE TEMPORARY TABLE/VIEW/FUNCTION`、受支持的 `SET` 和最后一条 `INSERT INTO`。在现有历史版本界面可查看运行记录、引擎 Job ID 和最新状态。集群绑定确认后，在 workflow 服务配置 `FLINK_RUN_PROJECT_ID`、`FLINK_RUN_SQL_GATEWAY`（如 `http://flink-sql-gateway:8083`）和 `FLINK_RUN_JOBMANAGER`（如 `http://flink-jobmanager:8081`）。先执行 `db/migrate-flink-deployment.sql`，再执行 `db/migrate-flink-submission-recovery.sql`。已有运行表升级时执行第二个脚本。
 
 接口以 `/api/workflow/flink/projects/{projectId}/assets/{id}` 为根：
 
 | 方法 | 输入与结果 |
 | --- | --- |
-| `GET /runs` | 分页查看作业版本、提交人、状态和引擎 Job ID，返回项目提交功能是否启用。 |
+| `GET /runs` | 分页查看作业版本、提交人、状态和引擎 Job ID，返回项目提交功能是否启用，以及整个作业的活动运行 `activeRun`。活动运行在其他页时，当前页仍可刷新其状态。 |
 | `POST /versions/{version}/runs` | 请求体 `requestId` 为 UUID。先登记运行，同键同版本重试复用原记录。同一作业只允许一条未终止运行。 |
 | `POST /runs/{runId}/refresh` | 按已知 Job ID 或唯一运行名称回查并记录状态。 |
 | `POST /runs/{runId}/cancel` | 向已确认的引擎 Job ID 发送取消请求，再通过刷新确认终态。 |
 
-提交前准备失败可以新开请求。发送 INSERT 后结果不明确时进入待核查，保留活动运行锁，通过集群回查补齐。引擎失联时保留上一次确认的状态。集群地址配置变化后，已有运行需要恢复原绑定才能继续处置。定时调度、发布审批和批次参数留在后续交付。 [SQL Gateway REST](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql-gateway/rest/) · [JobManager REST](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/rest_api/)
+提交前准备失败或发送 INSERT 前用尽时限时，释放活动运行锁，可以新开请求。发送 INSERT 后结果不明确时进入待核查。运行记录面板打开期间每隔约 10 秒回查，查询失败时可手动重试。引擎确认终态后释放活动运行锁。引擎失联时保留上一次确认的状态。集群地址配置变化后，已有运行需要恢复原绑定才能继续处置。定时调度、发布审批和批次参数留在后续交付。 [SQL Gateway REST](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql-gateway/rest/) · [JobManager REST](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/rest_api/)
+
+### 提交回执恢复
+
+SQL Gateway 返回 INSERT 操作标识后，Workflow 在等待引擎 Job ID 前保存会话与操作标识。Workflow 重启后，原运行的刷新接口优先用保存的标识读取回执。Gateway 会话失效、暂未返回 Job ID 或历史运行没有回执时，按唯一运行名查询 JobManager。确认 Job ID 后清理标识。Gateway 已返回 Job ID 时尽力关闭会话。若两个入口都无法确认提交结果，运行继续保留活动锁。
 
 ### 保存停机与断点恢复
 

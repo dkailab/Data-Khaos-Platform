@@ -104,7 +104,7 @@ export interface FlinkRun {
 }
 
 export function listFlinkRuns(project: string, id: string, current: number, size: number) {
-  return get<{ enabled: boolean; page: PageResult<FlinkRun> }>(`${asset(project, id)}/runs`, { current, size })
+  return get<{ enabled: boolean; page: PageResult<FlinkRun>; activeRun?: FlinkRun | null }>(`${asset(project, id)}/runs`, { current, size })
 }
 
 export function submitFlinkRun(project: string, id: string, version: number, requestId: string) {
