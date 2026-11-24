@@ -97,8 +97,9 @@ class Lab:
 
     def setup(self):
         self.compose("up", "-d", "--no-build", timeout=400)
+        # The entrypoint initializes the fixture before opening TCP connections.
         wait_for("MySQL schema and fixture",
-                 lambda: self.mysql("SELECT COUNT(*) FROM orders_source.orders;") == "3", seconds=180)
+                 lambda: self.mysql("SELECT COUNT(*) FROM orders_source.orders;") == "3", seconds=300)
         wait_for("Kafka broker", lambda: self.kafka("topics", "--create", "--if-not-exists",
                                                    "--topic", TOPIC, "--partitions", "1",
                                                    "--replication-factor", "1",
