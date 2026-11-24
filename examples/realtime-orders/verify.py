@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 LAB = Path(__file__).resolve().parent
 TOPIC = "orders.ods.v1"
+FLINK_SUBMIT_TIMEOUT = 240
 
 
 def run(command, *, stdin=None, timeout=45):
@@ -109,7 +110,7 @@ class Lab:
 
     def submit(self):
         self.compose("exec", "-T", "jobmanager", "env", "FLINK_HOME=/opt/flink", "bash",
-                     "/cdc/bin/flink-cdc.sh", "/lab/orders-cdc.yaml", timeout=100)
+                     "/cdc/bin/flink-cdc.sh", "/lab/orders-cdc.yaml", timeout=FLINK_SUBMIT_TIMEOUT)
         cdc = self.job("Orders MySQL CDC")
         self.submit_sql("warehouse.sql")
         warehouse = self.job("Orders realtime warehouse")
@@ -123,7 +124,7 @@ class Lab:
         script = script.replace("-- INCLUDE paid-order-views.sql", shared.rstrip())
         return self.compose("exec", "-T", "jobmanager", "sh", "-ec",
                      """input=$(mktemp); trap 'rm -f "$input"' EXIT; cat > "$input"; /opt/flink/bin/sql-client.sh -f "$input" """,
-                     stdin=script, timeout=110)
+                     stdin=script, timeout=FLINK_SUBMIT_TIMEOUT)
 
     def reconcile_batch(self, business_day=None, *, publish=False):
         if publish and business_day is not None:
