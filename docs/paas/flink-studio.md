@@ -79,6 +79,8 @@ flowchart LR
 
 ### 执行节点运行指标
 
-进入 **Flink 开发 → 历史版本 → 运行与记录 → 运行指标**，选择要排查的执行节点。页面展示节点状态和并行度，以及可采集到的输入输出吞吐、最高反压比例、平均忙碌和空闲比例、最慢输入水位线。一个 Flink 执行节点可能包含多个链式算子。
+进入 **Flink 开发 → 历史版本 → 查看 → 运行与记录 → 运行指标**，选择要排查的执行节点。页面展示节点状态和并行度，以及可采集到的输入输出吞吐、最高反压比例、平均忙碌和空闲比例、最慢输入水位线。一个 Flink 执行节点可能包含多个链式算子。
 
 `GET /runs/{runId}/metrics` 返回 `vertices`、`selectedVertexId` 和 `sample`。可选参数 `vertexId` 只接受该运行的执行节点 ID，缺省选第一个节点。访问要求与检查点一致。每次请求只读取所选节点的聚合样本。吞吐为可用子任务的速率之和，反压取最大值，忙碌和空闲取平均值，输入水位线取最小值。无样本的指标显示为「—」，实际零值正常展示。查询时间为平台读取样本的时间。 [Flink 指标说明](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/metrics/)
+
+「算子指标」按 Flink 算子名展示最慢输入和输出水位线。支持的源连接器展示待取记录数，汇总可用子任务的 `pendingRecords`。Kafka 源还展示最大分区积压，取各子任务 `records-lag-max` 的最大值。该值基于消费者当前读取偏移表示采样窗口内最慢分区的积压，消费组已提交偏移需另行查询。水位线与积压不可用时显示「—」。长算子链可能只展示部分算子指标，页面会提示。 [Flink Kafka 指标](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/connectors/datastream/kafka/#monitoring) · [Kafka 消费指标](https://kafka.apache.org/39/operations/monitoring/#consumer-monitoring)
