@@ -32,7 +32,7 @@ def wait_for(description, predicate, seconds=100):
         try:
             if value := predicate():
                 return value
-        except (OSError, RuntimeError, KeyError, ValueError) as error:
+        except (OSError, RuntimeError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
             last = error
         time.sleep(1)
     raise RuntimeError(f"Timed out: {description}. Last error: {last}")
@@ -377,7 +377,7 @@ def main():
         print("PASS realtime ADS:\n" + lab.mysql("SELECT * FROM orders_serving.ads_region_day ORDER BY 1,2;"), flush=True)
     except Exception:
         try:
-            print(lab.compose("logs", "--tail", "50", "jobmanager", "taskmanager"), flush=True)
+            print(lab.compose("logs", "--tail", "50", "mysql", "kafka", "jobmanager", "taskmanager"), flush=True)
         except (RuntimeError, OSError):
             pass
         raise

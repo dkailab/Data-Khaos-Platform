@@ -1,11 +1,12 @@
 import io
 import json
 import sys
+from subprocess import TimeoutExpired
 import unittest
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from verify import Lab, business_day_bounds, main
+from verify import Lab, business_day_bounds, main, wait_for
 
 
 class ReconciliationTest(unittest.TestCase):
@@ -40,6 +41,12 @@ class ReconciliationTest(unittest.TestCase):
     def matched_rows(self):
         return [["stream", self.day.isoformat(), "east", 1, "2500"],
                 ["batch", self.day.isoformat(), "east", 1, "2500"]]
+
+    def test_readiness_retries_transient_command_timeout(self):
+        predicate = Mock(side_effect=[TimeoutExpired("docker compose exec", 45), "ready"])
+        with patch("verify.time.sleep"):
+            self.assertEqual(wait_for("service readiness", predicate), "ready")
+        self.assertEqual(predicate.call_count, 2)
 
     def test_business_day_uses_shanghai_midnight(self):
         start, end = business_day_bounds(self.day)
