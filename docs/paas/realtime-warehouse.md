@@ -8,6 +8,8 @@
 
 脚本验证初始快照、Kafka 订单主键及增删改消息，再根据源表重新计算预期结果，逐键比对 MySQL 的 `dwd_paid_orders`、`dws_region_minute`、`ads_region_day`。两个 Flink 作业建立 checkpoint 后，脚本暂停 TaskManager、提交新的源变更，随后启动 TaskManager，检查两个作业的已恢复 checkpoint 和最终数据。末尾将旧记录和重复更新重新送入同一消费分区，再核对订单状态和聚合。随后冻结源表快照，启动有界 Flink 批作业，并逐行比较批 ADS 和流 ADS。
 
+2026-11-24 在 macOS arm64、Docker Engine 29.7.2 上运行完整样例，退出码为 0。实测通过了初始快照、Kafka 增量消息及主键校验、两个作业的检查点恢复、旧消息回放、流批 ADS 逐键对账、历史订单按日重算和 12 条事件时间窗口输出校验。
+
 | 文件 | 用途 |
 | --- | --- |
 | [compose.yml](../../examples/realtime-orders/compose.yml) | 隔离环境、共享 checkpoint 存储、内网连接。Flink REST 仅映射到本机随机端口。 |
