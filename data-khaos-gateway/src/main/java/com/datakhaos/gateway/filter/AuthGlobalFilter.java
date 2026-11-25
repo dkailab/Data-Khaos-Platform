@@ -4,6 +4,7 @@ import com.datakhaos.common.constant.CommonConstants;
 import com.datakhaos.common.model.R;
 import com.datakhaos.common.model.ResultCode;
 import com.datakhaos.common.security.JwtUtil;
+import com.datakhaos.common.security.WarehouseApiToken;
 import com.datakhaos.gateway.config.GatewayProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -12,6 +13,7 @@ import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
 import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpRequest;
@@ -21,6 +23,7 @@ import org.springframework.util.AntPathMatcher;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
+import java.util.Date;
 import java.util.List;
 
 /**
@@ -59,17 +62,35 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
             return chain.filter(exchange);
         }
 
-        String token = resolveToken(request.getHeaders().getFirst(CommonConstants.AUTH_HEADER));
+        String authorization = request.getHeaders().getFirst(CommonConstants.AUTH_HEADER);
+        if (WarehouseApiToken.isMachineAuthorization(authorization)) {
+            if (HttpMethod.GET.equals(request.getMethod()) && MATCHER.match(WarehouseApiToken.DATA_ROUTE, path)) {
+                // The query service validates the credential. Supply no platform identity for this request.
+                return forward(exchange, chain, null, null);
+            }
+            return unauthorized(exchange, "调用凭据不适用于此接口");
+        }
+        String token = resolveToken(authorization);
         if (token == null || !JwtUtil.verify(token, properties.getSecret())) {
             return unauthorized(exchange, "登录已过期或未登录");
         }
 
         String uid = JwtUtil.getUid(token, properties.getSecret());
+        Date expiry = JwtUtil.getExpiresAt(token);
+        if (uid == null || uid.isBlank() || expiry == null || !expiry.after(new Date())) {
+            return unauthorized(exchange, "登录已过期或未登录");
+        }
         String username = JwtUtil.getUsername(token, properties.getSecret());
-        ServerHttpRequest mutated = request.mutate()
+        return forward(exchange, chain, uid, username);
+    }
+
+    private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain, String uid, String username) {
+        ServerHttpRequest mutated = exchange.getRequest().mutate()
                 .headers(headers -> {
-                    headers.set(CommonConstants.HEADER_USER_ID, uid == null ? "" : uid);
-                    headers.set(CommonConstants.HEADER_USERNAME, username == null ? "" : username);
+                    headers.remove(CommonConstants.HEADER_USER_ID);
+                    headers.remove(CommonConstants.HEADER_USERNAME);
+                    if (uid != null) headers.set(CommonConstants.HEADER_USER_ID, uid);
+                    if (username != null) headers.set(CommonConstants.HEADER_USERNAME, username);
                     headers.remove(CommonConstants.HEADER_ROLES);
                     headers.remove(CommonConstants.HEADER_PERMISSIONS);
                     headers.remove(CommonConstants.HEADER_REAL_NAME);

@@ -6,6 +6,8 @@
 
 从仓库根目录执行 `python3 examples/realtime-orders/verify.py`。需要 Python 3.9+、Docker Compose、curl、tar 和 shasum。脚本启动独立的 MySQL 8.0.46、Apache Kafka 3.9.1 和 Flink 1.20.3，下载并校验 Flink CDC 3.6.0 对应的工具和连接器。支持使用 `DK_CDC_CACHE` 复用已下载依赖。业务容器无需构建。默认在退出时清理独立测试项目的容器和卷，指定 `--keep` 可保留作业和测试数据。
 
+日常回归可运行 `python3 examples/realtime-orders/verify.py --smoke`。它验证 CDC 初始快照和增量增删改写入后 DWD、DWS、ADS 与源表一致。完整命令另外覆盖 TaskManager 重启、旧事件回放、批流对账和窗口函数。
+
 脚本验证初始快照、Kafka 订单主键及增删改消息，再根据源表重新计算预期结果，逐键比对 MySQL 的 `dwd_paid_orders`、`dws_region_minute`、`ads_region_day`。两个 Flink 作业建立 checkpoint 后，脚本暂停 TaskManager、提交新的源变更，随后启动 TaskManager，检查两个作业的已恢复 checkpoint 和最终数据。末尾将旧记录和重复更新重新送入同一消费分区，再核对订单状态和聚合。随后冻结源表快照，启动有界 Flink 批作业，并逐行比较批 ADS 和流 ADS。
 
 | 文件 | 用途 |

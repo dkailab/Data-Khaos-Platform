@@ -176,6 +176,45 @@ PipelineRunner 提交到线程池
 查询服务对每账号、资产、业务日和发布版本短暂复用结果。每个服务实例最多 128 条，单条不超过 64 KiB，有效期 30 秒。命中时仍向目标库核对版本；新发布自然使用新缓存键。「刷新结果」绕过命中，重新读取数据。通用 SQL 和 BI 原有查询入口继续使用各自的查询链路。MySQL 受管 ADS 可供现有 BI 数据集直接消费。
 
 
+订单 ADS 固定接口使用平台登录令牌。完成以上迁移并以带质量门禁的工作流发布 2026-11-17 后，可从网关试跑：
+
+```bash
+curl -fsS -H "Authorization: Bearer ${DK_ACCESS_TOKEN}" \
+  'http://127.0.0.1:8099/api/data/v1/order-region-gmv?bizDate=2026-11-17'
+```
+
+先检查 `R.code`，为 `0` 时读取 `data.rows`。示例按地区返回 `region` 和 `gmv`，金额以两位小数的字符串表示。结果包含业务日期、发布 ID、发布时间、质量快照 ID 和 `truncated`。已发布空分区返回空数组。无法确认可见的质量通过发布时返回业务码 404，遇到目标版本不同步时返回业务码 5001，可稍后重试。
+
+### 项目 API 版本管理
+
+已有平台数据库先执行 `db/migrate-warehouse-api-versions.sql`，再同步部署 query 与 gateway。项目内具有 `task:develop` 能力的成员可以管理版本。项目成员调用已发布版本时仍需有目标数据资产的读取权限。首版使用上述地区成交额模板。
+
+管理前缀为 `/api/query/warehouse/v1/projects/{projectId}/apis`，版本路径为 `/{apiCode}/versions/{version}`。
+
+| 操作 | 请求 | 结果 |
+| --- | --- | --- |
+| 列表 | `GET` 管理前缀，支持 `current` 和 `size`。 | 按编码与版本排序的分页列表。 |
+| 新建 | `POST` 版本路径，传 `{"name":"地区成交额","maxRows":50}`。 | 新版本进入 `DRAFT`，返回初始修订号 `1`。 |
+| 编辑 | `PUT` 版本路径，传当前 `revision` 和同样的 JSON。 | 草稿更新并增加修订号。行数上限接受 1 至 100。 |
+| 发布 | `POST` 版本路径追加 `/publish?revision={revision}`。 | 当前草稿变为 `PUBLISHED`，记录发布人和发布时间。 |
+| 下线 | `POST` 版本路径追加 `/offline?revision={revision}`。 | 指定版本变为 `OFFLINE`。此后的调用返回业务码 404。 |
+
+发布后通过 `GET /api/data/v1/projects/{projectId}/apis/{apiCode}/versions/{version}?bizDate=2026-11-17` 调用。多个已发布版本可以同时提供服务。需要调整配置时新建版本，已有消费者可沿用原版本。下线不取消已经开始的请求。三元组 `projectId + apiCode + version` 唯一，修订号过期时刷新列表后重试。
+
+### 机器调用凭据
+
+已有数据库执行 `db/migrate-warehouse-api-credentials.sql`，并协同升级 permission、query 和 gateway。项目开发成员使用平台登录令牌，在上述管理版本路径后追加以下接口。签发账号须是启用的非内置管理员账号，且实际调用仍需拥有目标数据资产的读取权限。
+
+| 操作 | 请求 | 结果 |
+| --- | --- | --- |
+| 签发 | `POST /credentials`，传 `{"appName":"orders-worker","ttlHours":24}`。 | 返回凭据元数据和仅展示一次的 `token`。有效期接受 1 至 168 小时。 |
+| 查询 | `GET /credentials`，支持 `current` 和 `size`。 | 分页返回签发人、到期时间和吊销记录。 |
+| 吊销 | `POST /credentials/{credentialId}/revoke`。 | 重复调用安全。后续使用该凭据发起的请求会被拒绝。 |
+
+应用只需把签发时返回的 `dkwh_…` 放入 `Authorization: Bearer` 请求头，然后调用对应的版本化 GET 接口。部署时通过启用 HTTPS 的网关访问，业务服务端口留在内网。凭据只适用于所绑定的项目、API 编码和版本。签发账号被禁用、退出项目、失去开发权限或失去资产读取权限时，调用会被拒绝。轮换时可签发新凭据、切换调用端，再吊销原凭据。
+
+网关对机器请求沿用来源 IP 限流。查询服务对通过凭据校验并匹配绑定版本的请求记录凭据 ID、项目、版本、返回码、耗时和数据发布 ID。独立应用注册、应用级配额和可检索的审计页面仍待接入。
+
 ## 4. 数据模型设计
 
 ### pipeline_task（管道任务定义）

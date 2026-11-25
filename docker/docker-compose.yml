@@ -83,6 +83,8 @@ services:
       - ../db/migrate-flink-pressure-alert.sql:/docker-entrypoint-initdb.d/31-flink-pressure-alert.sql:ro
       - ../db/migrate-flink-kafka-alert.sql:/docker-entrypoint-initdb.d/32-flink-kafka-alert.sql:ro
       - ../db/migrate-flink-event-time-alert.sql:/docker-entrypoint-initdb.d/33-flink-event-time-alert.sql:ro
+      - ../db/migrate-warehouse-api-versions.sql:/docker-entrypoint-initdb.d/34-warehouse-api-versions.sql:ro
+      - ../db/migrate-warehouse-api-credentials.sql:/docker-entrypoint-initdb.d/35-warehouse-api-credentials.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s

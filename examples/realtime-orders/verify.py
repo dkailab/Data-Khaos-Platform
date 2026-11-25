@@ -202,6 +202,8 @@ class Lab:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--keep", action="store_true", help="Leave the example project running for inspection")
+    parser.add_argument("--smoke", action="store_true",
+                        help="Verify snapshot and incremental CDC against DWD, DWS and ADS only")
     args = parser.parse_args()
     os.environ["DK_CDC_CACHE"] = run(["bash", str(LAB / "prepare.sh")], timeout=1000)
     project = "dk-orders-cdc-" + uuid.uuid4().hex[:8]
@@ -228,6 +230,10 @@ def main():
         if ops != [("c", 104), ("u", 101), ("u", 102), ("d", 103)]:
             raise RuntimeError(f"Unexpected binlog operations: {ops}")
         print("PASS ODS operations:", ops, flush=True)
+
+        if args.smoke:
+            print("PASS smoke: snapshot and incremental CDC reconciled through ADS", flush=True)
+            return
 
         lab.recover(jobs)
         recovered = lab.records(10)

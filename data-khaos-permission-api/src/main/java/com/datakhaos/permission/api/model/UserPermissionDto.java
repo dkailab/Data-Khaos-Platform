@@ -16,6 +16,9 @@ public class UserPermissionDto implements Serializable {
 
     private String userId;
 
+    /** Whether the platform account exists and is enabled. */
+    private Boolean active;
+
     /** 角色编码集合 */
     private List<String> roles = new ArrayList<>();
 

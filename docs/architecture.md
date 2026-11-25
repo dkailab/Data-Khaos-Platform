@@ -7,7 +7,7 @@
 | 运行基础设施 | MySQL、Redis、Nacos；Hive/HDFS 与外部引擎按部署场景启用。 |
 | 数据工程 | datasource 管理连接和 JDBC SPI；pipeline 进行同步；schedule 触发任务；workflow 运行 DAG。 |
 | 治理与权限 | metadata 管理目录、资产与血缘；dquality 负责规则、执行和快照；auth、permission、approval 管理身份与授权。 |
-| 数据服务 | query 提供 SQL 工作台，mart 提供模型、指标和语义查询。 |
+| 数据服务 | query 提供 SQL 工作台和受管物化就绪检查，mart 提供模型、指标和语义查询。面向业务系统、BI 和 AI 的数仓读 API 由 PaaS 发布，经网关开放。见[数仓数据服务 API 规划](paas-implementation-plan.md#数仓数据服务-api)。 |
 | 体验 | data-khaos-web 提供门户、数据地图和业务工作区；visual 提供 BI 数据集、图表和仪表板。 |
 
 Controller → Service → Mapper。跨服务通过归属模块的 `*-api` 客户端调用；跨域关系通过资产 ID、模型 ID 和运行 ID 关联。平台 API 是 BI 的数据边界。

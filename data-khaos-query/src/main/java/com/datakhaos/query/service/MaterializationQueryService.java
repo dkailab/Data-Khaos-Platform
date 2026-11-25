@@ -7,6 +7,8 @@ import com.datakhaos.common.security.MetadataHolder;
 import com.datakhaos.datasource.api.connector.DatasourceApiClient;
 import com.datakhaos.datasource.api.model.QueryResult;
 import com.datakhaos.query.dto.MaterializationPreview;
+import com.datakhaos.query.dto.MaterializationStatus;
+import com.datakhaos.query.dto.OrderRegionGmv;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -22,6 +24,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.regex.Pattern;
@@ -39,6 +42,10 @@ public class MaterializationQueryService {
     private static final long CACHE_TTL_NANOS = Duration.ofSeconds(30).toNanos();
     private static final int MAX_CACHE_ENTRIES = 128;
     private static final int MAX_CACHE_BYTES = 64 * 1024;
+    private static final String ORDER_REGION_GMV_ASSET = "mt_pr2_ads_region_gmv";
+    private static final String ORDER_REGION_GMV_TABLE = "pr2_ads_region_gmv";
+    static final int ORDER_REGION_GMV_LIMIT = 100;
+    private static final Pattern GMV_DECIMAL = Pattern.compile("-?[0-9]{1,12}\\.[0-9]{2}");
 
     private final RestTemplate http;
     private final DatasourceApiClient datasources;
@@ -53,6 +60,75 @@ public class MaterializationQueryService {
     }
 
     public MaterializationPreview preview(String assetId, String requestedDate, boolean refresh) {
+        VerifiedPublication verified = verifyPublication(assetId, requestedDate);
+        Asset asset = verified.asset();
+        LocalDate date = verified.date();
+        Publication publication = verified.publication();
+        Marker marker = verified.marker();
+        CacheKey key = new CacheKey(MetadataHolder.getUserId(), asset, date, publication.id(), marker.generation());
+        QueryResult result = refresh ? null : getCached(key);
+        boolean hit = result != null;
+        if (!hit) {
+            String sql = "SELECT * FROM %s.%s WHERE %s = '%s' LIMIT 100".formatted(
+                    quoted(asset.databaseName()), quoted(asset.tableName()), quoted(marker.partitionColumn()), date);
+            result = query(asset.datasourceId(), sql);
+            if (!marker.equals(readMarker(asset, publication, date))) {
+                throw new BusinessException("物化版本正在更新，请刷新后重试");
+            }
+            cache(key, result);
+        }
+        return new MaterializationPreview(asset.tableName(), date.toString(), publication.id(),
+                verified.quality().id(), publication.publishedAt(), hit, result);
+    }
+
+    public MaterializationStatus status(String assetId, String requestedDate) {
+        VerifiedPublication verified = verifyPublication(assetId, requestedDate);
+        Publication publication = verified.publication();
+        return new MaterializationStatus(verified.asset().id(), verified.date().toString(),
+                publication.id(), verified.quality().id(), publication.publishedAt());
+    }
+
+    public OrderRegionGmv orderRegionGmv(String requestedDate) {
+        return orderRegionGmv(requestedDate, ORDER_REGION_GMV_LIMIT);
+    }
+
+    OrderRegionGmv orderRegionGmv(String requestedDate, int limit) {
+        VerifiedPublication verified = verifyPublication(ORDER_REGION_GMV_ASSET, requestedDate);
+        Asset asset = verified.asset();
+        Marker marker = verified.marker();
+        LocalDate date = verified.date();
+        Publication publication = verified.publication();
+        if (!ORDER_REGION_GMV_TABLE.equals(asset.tableName()) || !"stat_date".equals(marker.partitionColumn())) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "发布目标与地区成交额契约不匹配");
+        }
+        // Convert the DECIMAL at the source to retain its scale across the datasource JSON boundary.
+        String sql = """
+                SELECT region, TRIM(CAST(gmv AS CHAR(64))) AS gmv FROM %s.%s
+                WHERE stat_date = '%s' ORDER BY region LIMIT %d
+                """.formatted(quoted(asset.databaseName()), quoted(asset.tableName()), date, limit + 1);
+        List<Map<String, Object>> rows = query(asset.datasourceId(), sql).getRows();
+        if (!marker.equals(readMarker(asset, publication, date))) {
+            throw new BusinessException("物化版本正在更新，请刷新后重试");
+        }
+        if (rows == null) {
+            throw new BusinessException("地区成交额查询未返回有效结果");
+        }
+        List<OrderRegionGmv.RegionAmount> amounts = rows.stream().limit(limit)
+                .map(MaterializationQueryService::regionAmount)
+                .toList();
+        return new OrderRegionGmv(date.toString(), publication.id(), verified.quality().id(),
+                publication.publishedAt(), rows.size() > limit, amounts);
+    }
+
+    private static OrderRegionGmv.RegionAmount regionAmount(Map<String, Object> row) {
+        if (row == null || !(row.get("region") instanceof String region)
+                || !(row.get("gmv") instanceof String gmv) || !GMV_DECIMAL.matcher(gmv).matches()) {
+            throw new BusinessException("地区成交额数据与 API 契约不匹配");
+        }
+        return new OrderRegionGmv.RegionAmount(region, gmv);
+    }
+
+    private VerifiedPublication verifyPublication(String assetId, String requestedDate) {
         String owner = MetadataHolder.getUserId();
         if (owner == null || owner.isBlank()) {
             throw new BusinessException(ResultCode.UNAUTHORIZED);
@@ -86,27 +162,14 @@ public class MaterializationQueryService {
         }
         if (Boolean.TRUE.equals(lookup(RESTRICTED_URL, headers, new ParameterizedTypeReference<R<Boolean>>() {},
                 asset.databaseName(), asset.tableName()))) {
-            throw new BusinessException(ResultCode.FORBIDDEN, "目标表存在行列策略，暂无受管物化预览");
+            throw new BusinessException(ResultCode.FORBIDDEN, "目标表存在行列策略，暂无受管物化查询");
         }
         if (!"MYSQL".equals(datasources.datasourceType(asset.datasourceId()))) {
-            throw new BusinessException("受管物化预览仅支持 MySQL");
+            throw new BusinessException("受管物化查询仅支持 MySQL");
         }
 
-        Marker marker = readMarker(asset, publication, date);
-        CacheKey key = new CacheKey(owner, asset, date, publication.id(), marker.generation());
-        QueryResult result = refresh ? null : getCached(key);
-        boolean hit = result != null;
-        if (!hit) {
-            String sql = "SELECT * FROM %s.%s WHERE %s = '%s' LIMIT 100".formatted(
-                    quoted(asset.databaseName()), quoted(asset.tableName()), quoted(marker.partitionColumn()), date);
-            result = query(asset.datasourceId(), sql);
-            if (!marker.equals(readMarker(asset, publication, date))) {
-                throw new BusinessException("物化版本正在更新，请刷新后重试");
-            }
-            cache(key, result);
-        }
-        return new MaterializationPreview(asset.tableName(), date.toString(), publication.id(),
-                evidence.qualityPass().id(), publication.publishedAt(), hit, result);
+        return new VerifiedPublication(asset, date, publication, evidence.qualityPass(),
+                readMarker(asset, publication, date));
     }
 
     private Marker readMarker(Asset asset, Publication publication, LocalDate date) {
@@ -115,7 +178,8 @@ public class MaterializationQueryService {
                 WHERE target_table = '%s' AND biz_date = '%s' LIMIT 1
                 """.formatted(quoted(asset.databaseName()), asset.tableName(), date);
         QueryResult result = query(asset.datasourceId(), sql);
-        Map<String, Object> row = result.getRows().isEmpty() ? Map.of() : result.getRows().get(0);
+        Map<String, Object> row = result.getRows() == null || result.getRows().isEmpty()
+                ? Map.of() : result.getRows().get(0);
         if (publication.id() == null || !publication.id().equals(row.get("instance_id"))
                 || !(row.get("partition_column") instanceof String column) || !identifier(column)
                 || !(row.get("generation") instanceof String generation) || !generation.equals(publication.materializationGeneration())) {
@@ -194,6 +258,7 @@ public class MaterializationQueryService {
                                String targetTable, String publishedAt, String materializationGeneration) {}
     private record Quality(String id) {}
     private record Marker(String partitionColumn, String generation) {}
+    private record VerifiedPublication(Asset asset, LocalDate date, Publication publication, Quality quality, Marker marker) {}
     private record CacheKey(String userId, Asset asset, LocalDate date, String publicationId, String generation) {}
     private record CacheValue(QueryResult result, long createdAt) {}
 }

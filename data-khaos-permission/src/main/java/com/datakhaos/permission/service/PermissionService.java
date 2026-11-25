@@ -53,6 +53,7 @@ public class PermissionService {
     public UserPermissionDto getUserPermission(String userId) {
         UserPermissionDto dto = new UserPermissionDto();
         dto.setUserId(userId);
+        dto.setActive(projectGroupService.isActiveUser(userId));
 
         List<String> roleIds = userRoleMapper.selectList(
                         new LambdaQueryWrapper<SysUserRole>().eq(SysUserRole::getUserId, userId))
