@@ -81,6 +81,8 @@ services:
       - ../db/migrate-flink-checkpoint-alert.sql:/docker-entrypoint-initdb.d/29-flink-checkpoint-alert.sql:ro
       - ../db/migrate-flink-alert-notification.sql:/docker-entrypoint-initdb.d/30-flink-alert-notification.sql:ro
       - ../db/migrate-flink-pressure-alert.sql:/docker-entrypoint-initdb.d/31-flink-pressure-alert.sql:ro
+      - ../db/migrate-flink-kafka-alert.sql:/docker-entrypoint-initdb.d/32-flink-kafka-alert.sql:ro
+      - ../db/migrate-flink-event-time-alert.sql:/docker-entrypoint-initdb.d/33-flink-event-time-alert.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
@@ -301,6 +303,8 @@ services:
       FLINK_RUN_ALLOWED_JARS: ${FLINK_RUN_ALLOWED_JARS:-}
       FLINK_CHECKPOINT_ALERT_ENABLED: ${FLINK_CHECKPOINT_ALERT_ENABLED:-false}
       FLINK_PRESSURE_ALERT_ENABLED: ${FLINK_PRESSURE_ALERT_ENABLED:-false}
+      FLINK_KAFKA_ALERT_ENABLED: ${FLINK_KAFKA_ALERT_ENABLED:-false}
+      FLINK_EVENT_TIME_ALERT_ENABLED: ${FLINK_EVENT_TIME_ALERT_ENABLED:-false}
       FLINK_ALERT_NOTIFICATION_TOKEN: ${FLINK_ALERT_NOTIFICATION_TOKEN:-}
     ports:
       # 本地验收可用，远程请求走网关，内部调用用容器网络。

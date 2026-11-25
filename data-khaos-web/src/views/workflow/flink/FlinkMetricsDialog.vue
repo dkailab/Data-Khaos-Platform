@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import DkButton from '@/paas-ui/DkButton.vue'
+import FlinkKafkaAlerts from './FlinkKafkaAlerts.vue'
+import FlinkEventTimeDiagnosis from './FlinkEventTimeDiagnosis.vue'
+import FlinkEventTimeWatch from './FlinkEventTimeWatch.vue'
 import { getFlinkMetrics, getFlinkPressureAlerts, type FlinkMetricsView, type FlinkPressureAlerts } from '@/api/flinkStudio'
 
-const props = defineProps<{ project: string; assetId: string; runId: string }>()
+const props = defineProps<{ project: string; assetId: string; runId: string; canConfigure: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const vertices = ref<FlinkMetricsView['vertices']>([])
 const requested = ref('')
@@ -123,6 +126,10 @@ watch(attempt, async (_, __, onCleanup) => {
         <p class="metrics-meta">吞吐汇总可用子任务样本。— 表示该指标暂无样本。</p>
       </template>
     </template>
+    <FlinkEventTimeDiagnosis :project="project" :asset-id="assetId" :run-id="runId"
+      :vertex-id="selection" :vertex-status="current?.id === selection ? current.status : undefined" />
+    <FlinkEventTimeWatch :project="project" :asset-id="assetId" :run-id="runId" :refresh="attempt"
+      :can-configure="canConfigure" :vertices="vertices" :vertex="loading || error ? undefined : current" />
     <section class="operator-metrics" aria-labelledby="flink-pressure-heading">
       <h3 id="flink-pressure-heading">持续反压告警</h3>
       <p v-if="pressureLoading" role="status">正在读取反压告警。</p>
@@ -146,6 +153,8 @@ watch(attempt, async (_, __, onCleanup) => {
         </el-table-column>
       </el-table>
     </section>
+    <FlinkKafkaAlerts :project="project" :asset-id="assetId" :run-id="runId" :refresh="attempt"
+      :can-configure="canConfigure" :vertex="loading || error ? undefined : current" />
     <template #footer><DkButton :loading="loading" @click="attempt++">刷新指标</DkButton></template>
   </el-dialog>
 </template>

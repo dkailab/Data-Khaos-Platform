@@ -3,6 +3,8 @@ package com.datakhaos.workflow.service;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import cn.hutool.crypto.digest.DigestUtil;
 import com.datakhaos.workflow.flink.FlinkDefinition;
+import com.datakhaos.workflow.flink.FlinkEventTimeSample;
+import com.datakhaos.workflow.flink.FlinkEventTimeDiagnosis;
 import com.datakhaos.workflow.entity.FlinkAsset.Kind;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.datakhaos.common.exception.BusinessException;
@@ -23,6 +25,8 @@ import com.datakhaos.workflow.flink.FlinkRuntimeClient.RuntimeFailure;
 import com.datakhaos.workflow.mapper.FlinkAssetMapper;
 import com.datakhaos.workflow.runner.FlinkCheckpointMonitor;
 import com.datakhaos.workflow.runner.FlinkPressureMonitor;
+import com.datakhaos.workflow.runner.FlinkKafkaMonitor;
+import com.datakhaos.workflow.runner.FlinkEventTimeMonitor;
 import com.datakhaos.workflow.runner.FlinkCheckpointMonitor.AlertHistory;
 import com.datakhaos.workflow.mapper.FlinkDeploymentMapper;
 import lombok.RequiredArgsConstructor;
@@ -49,6 +53,8 @@ public class FlinkDeploymentService {
     private final FlinkRuntimeClient runtime;
     private final FlinkCheckpointMonitor checkpointMonitor;
     private final FlinkPressureMonitor pressureMonitor;
+    private final FlinkKafkaMonitor kafkaMonitor;
+    private final FlinkEventTimeMonitor eventTimeMonitor;
 
     public RunPage page(String project, String assetId, long current, long size) {
         authorize(project, DEVELOP);
@@ -225,6 +231,45 @@ public class FlinkDeploymentService {
         return pressureMonitor.history(find(project, assetId, id).getId());
     }
 
+    public FlinkKafkaMonitor.History kafkaAlerts(String project, String assetId, String id) {
+        authorize(project, DEVELOP);
+        return kafkaMonitor.history(find(project, assetId, id).getId());
+    }
+
+    public FlinkKafkaMonitor.History configureKafkaAlerts(String project, String assetId, String id, boolean enabled,
+                                                          String vertexId, Long high, Long low) {
+        authorize(project, DEVELOP);
+        authorize(project, SCHEDULE);
+        FlinkDeployment run = find(project, assetId, id);
+        kafkaMonitor.requireEnabled();
+        if (run.getEngineJobId() == null) {
+            throw new BusinessException(409, "引擎作业 ID 尚未确认");
+        }
+        if (!enabled) {
+            kafkaMonitor.disable(id, run.getClusterKey(), run.getEngineJobId(), LocalDateTime.now());
+            return kafkaMonitor.history(id);
+        }
+        requireBinding(run);
+        if (run.getState() != State.SUBMITTED) {
+            throw new BusinessException(409, "仅已提交的运行可以启用 Kafka 积压告警");
+        }
+        if (vertexId == null || !vertexId.matches("[0-9a-f]{32}") || high == null || low == null
+                || low < 0 || high <= low || high > 1_000_000_000_000L) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "请选择执行节点，并填写有效的告警和恢复阈值");
+        }
+        FlinkRuntimeClient.KafkaReading reading;
+        try {
+            reading = runtime.kafkaLag(run.getEngineJobId(), vertexId);
+        } catch (RuntimeFailure e) {
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "暂时无法确认 Kafka 指标");
+        }
+        if (!reading.supported()) {
+            throw new BusinessException(409, "所选执行节点当前未上报 Kafka 最大分区积压指标");
+        }
+        kafkaMonitor.enable(id, run.getClusterKey(), run.getEngineJobId(), vertexId, reading.vertexName(), high, low);
+        return kafkaMonitor.history(id);
+    }
+
     public FlinkCheckpointView checkpoints(String project, String assetId, String id) {
         String jobId = observedJob(project, assetId, id);
         try {
@@ -232,6 +277,38 @@ public class FlinkDeploymentService {
         } catch (RuntimeFailure e) {
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "暂时无法读取 Flink 检查点统计");
         }
+    }
+
+    public FlinkEventTimeSample eventTime(String project, String assetId, String id, String vertexId) {
+        String jobId = observedJob(project, assetId, id);
+        if (vertexId == null || !vertexId.matches("[0-9a-f]{32}")) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "执行节点 ID 无效");
+        }
+        try {
+            return runtime.eventTime(jobId, vertexId).orElseThrow(() ->
+                    new BusinessException(ResultCode.NOT_FOUND, "Flink 执行节点不存在或不可见"));
+        } catch (RuntimeFailure e) {
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "暂时无法读取 Flink 水位线");
+        }
+    }
+
+    public FlinkEventTimeMonitor.History eventTimeAlerts(String project, String assetId, String id) {
+        authorize(project, DEVELOP);
+        return eventTimeMonitor.history(find(project, assetId, id).getId());
+    }
+
+    public FlinkEventTimeMonitor.History configureEventTimeAlerts(String project, String assetId, String id,
+                                                                  boolean enabled, String vertexId) {
+        authorize(project, DEVELOP);
+        authorize(project, SCHEDULE);
+        eventTimeMonitor.requireEnabled();
+        FlinkDeployment run = find(project, assetId, id);
+        if (run.getEngineJobId() == null) throw new BusinessException(409, "引擎作业 ID 尚未确认");
+        if (enabled && !FlinkEventTimeDiagnosis.usable(eventTime(project, assetId, id, vertexId))) {
+            throw new BusinessException(409, "所选节点须处于运行状态并上报输入计数和水位线");
+        }
+        eventTimeMonitor.configure(id, run.getClusterKey(), run.getEngineJobId(), vertexId, enabled, LocalDateTime.now());
+        return eventTimeMonitor.history(id);
     }
 
     public FlinkMetricsView metrics(String project, String assetId, String id, String vertexId) {

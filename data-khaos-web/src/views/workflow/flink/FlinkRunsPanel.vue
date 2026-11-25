@@ -188,7 +188,7 @@ onBeforeUnmount(() => { sequence++; closed = true })
     <FlinkCheckpointDialog v-if="checkpointRun" :project="project" :asset-id="assetId"
       :run-id="checkpointRun" @close="checkpointRun = undefined" />
     <FlinkMetricsDialog v-if="metricsRun" :key="metricsRun" :project="project" :asset-id="assetId"
-      :run-id="metricsRun" @close="metricsRun = undefined" />
+      :run-id="metricsRun" :can-configure="canRun" @close="metricsRun = undefined" />
     <el-pagination v-if="total > size" v-model:current-page="current" :page-size="size" :total="total"
       layout="prev, pager, next" @current-change="load" />
   </section>

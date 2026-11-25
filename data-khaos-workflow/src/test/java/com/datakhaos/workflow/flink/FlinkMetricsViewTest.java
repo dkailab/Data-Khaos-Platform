@@ -86,6 +86,31 @@ class FlinkMetricsViewTest {
     }
 
     @Test
+    void kafkaMonitoringRequiresEveryDiscoveredLagGaugeAndPreservesZero() throws Exception {
+        var query = FlinkMetricsView.kafkaMetrics(json.readTree("""
+                [{"id":"Source[1].KafkaSourceReader.KafkaConsumer.records-lag-max"},
+                 {"id":"Source[2].KafkaSourceReader.KafkaConsumer.records-lag-max"},
+                 {"id":"Source[1].pendingRecords"},{"id":"backPressuredTimeMsPerSecond"}]
+                """));
+        assertEquals(2, query.get().split(",").length);
+        assertNull(FlinkMetricsView.kafkaLag(json.readTree("""
+                [{"id":"Source[1].KafkaSourceReader.KafkaConsumer.records-lag-max","max":0}]
+                """), query));
+        assertNull(FlinkMetricsView.kafkaLag(json.readTree("""
+                [{"id":"Source[1].KafkaSourceReader.KafkaConsumer.records-lag-max","max":0},
+                 {"id":"Source[2].KafkaSourceReader.KafkaConsumer.records-lag-max","max":"NaN"}]
+                """), query));
+        assertEquals(0L, FlinkMetricsView.kafkaLag(json.readTree("""
+                [{"id":"Source[1].KafkaSourceReader.KafkaConsumer.records-lag-max","max":0},
+                 {"id":"Source[2].KafkaSourceReader.KafkaConsumer.records-lag-max","max":0}]
+                """), query));
+        assertEquals(12500L, FlinkMetricsView.kafkaLag(json.readTree("""
+                [{"id":"Source[1].KafkaSourceReader.KafkaConsumer.records-lag-max","max":12500},
+                 {"id":"Source[2].KafkaSourceReader.KafkaConsumer.records-lag-max","max":2000}]
+                """), query));
+    }
+
+    @Test
     void leavesAbsentAndInvalidSamplesUnknown() throws Exception {
         assertNull(FlinkMetricsView.sample(json.readTree("[]"), false));
         assertNull(FlinkMetricsView.sample(json.readTree("""

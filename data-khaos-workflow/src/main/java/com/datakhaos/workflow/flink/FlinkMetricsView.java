@@ -47,16 +47,24 @@ public record FlinkMetricsView(List<Vertex> vertices, String selectedVertexId, S
     }
 
     static MetricQuery availableMetrics(JsonNode response) {
+        return selectMetrics(response, false);
+    }
+
+    static MetricQuery kafkaMetrics(JsonNode response) {
+        return selectMetrics(response, true);
+    }
+
+    private static MetricQuery selectMetrics(JsonNode response, boolean kafkaOnly) {
         if (!response.isArray()) {
             throw new FlinkRuntimeClient.RuntimeFailure("Flink 未返回有效指标列表");
         }
         Set<String> available = new HashSet<>();
         response.forEach(metric -> available.add(metric.path("id").asText()));
         var query = new ArrayList<String>();
-        METRICS.stream().filter(available::contains).forEach(query::add);
+        if (!kafkaOnly) METRICS.stream().filter(available::contains).forEach(query::add);
         int length = String.join(",", query).length();
         boolean truncated = false;
-        for (String id : available.stream().filter(metric -> operatorSuffix(metric) != null).sorted().toList()) {
+        for (String id : available.stream().filter(metric -> kafkaOnly ? KAFKA_LAG.equals(operatorSuffix(metric)) : operatorSuffix(metric) != null).sorted().toList()) {
             if (id.indexOf(',') >= 0 || id.codePoints().anyMatch(Character::isISOControl)) {
                 truncated = true;
                 continue;
@@ -70,6 +78,19 @@ public record FlinkMetricsView(List<Vertex> vertices, String selectedVertexId, S
             length += encoded.length() + 1;
         }
         return new MetricQuery(String.join(",", query), truncated);
+    }
+
+    static Long kafkaLag(JsonNode response, MetricQuery query) {
+        if (!response.isArray() || query.operatorMetricsTruncated() || query.get().isEmpty()) return null;
+        Set<String> expected = new HashSet<>(List.of(query.get().split(",")));
+        long peak = 0;
+        for (JsonNode entry : response) {
+            if (!expected.remove(URLEncoder.encode(entry.path("id").asText(), StandardCharsets.UTF_8))) continue;
+            Double value = bounded(entry.path("max"), 9_007_199_254_740_991d);
+            if (value == null || value != Math.floor(value)) return null;
+            peak = Math.max(peak, value.longValue());
+        }
+        return expected.isEmpty() ? peak : null;
     }
 
     static Sample sample(JsonNode response, boolean operatorMetricsTruncated) {
@@ -138,7 +159,7 @@ public record FlinkMetricsView(List<Vertex> vertices, String selectedVertexId, S
         return node.isNumber() || node.isTextual() ? node.asDouble(Double.NaN) : Double.NaN;
     }
 
-    private static Instant watermark(JsonNode node) {
+    static Instant watermark(JsonNode node) {
         double millis = numeric(node);
         // Flink uses Long.MIN_VALUE before a watermark and Long.MAX_VALUE at end of input.
         return Double.isFinite(millis) && Math.abs(millis) <= 8_640_000_000_000_000d

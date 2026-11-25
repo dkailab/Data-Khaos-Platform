@@ -1,17 +1,23 @@
 package com.datakhaos.workflow.controller;
 
 import com.datakhaos.common.model.R;
+import com.datakhaos.common.exception.BusinessException;
+import com.datakhaos.common.model.ResultCode;
 import com.datakhaos.workflow.flink.FlinkRunView;
+import com.datakhaos.workflow.flink.FlinkEventTimeSample;
 import com.datakhaos.workflow.flink.FlinkCheckpointView;
 import com.datakhaos.workflow.flink.FlinkMetricsView;
 import com.datakhaos.workflow.service.FlinkDeploymentService;
 import com.datakhaos.workflow.runner.FlinkCheckpointMonitor.AlertHistory;
 import com.datakhaos.workflow.runner.FlinkPressureMonitor;
+import com.datakhaos.workflow.runner.FlinkKafkaMonitor;
+import com.datakhaos.workflow.runner.FlinkEventTimeMonitor;
 import com.datakhaos.workflow.service.FlinkDeploymentService.RunPage;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -59,6 +65,43 @@ public class FlinkDeploymentController {
         return R.ok(runs.pressureAlerts(projectId, id, runId));
     }
 
+    @GetMapping("/runs/{runId}/kafka-alerts")
+    public R<FlinkKafkaMonitor.History> kafkaAlerts(@PathVariable String projectId, @PathVariable String id,
+                                                    @PathVariable String runId) {
+        return R.ok(runs.kafkaAlerts(projectId, id, runId));
+    }
+
+    @PutMapping("/runs/{runId}/kafka-alerts")
+    public R<FlinkKafkaMonitor.History> configureKafkaAlerts(@PathVariable String projectId, @PathVariable String id,
+            @PathVariable String runId, @RequestBody KafkaRule rule) {
+        if (rule.enabled() == null) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "启用状态必填");
+        }
+        return R.ok(runs.configureKafkaAlerts(projectId, id, runId, rule.enabled(),
+                rule.vertexId(), rule.highThreshold(), rule.lowThreshold()));
+    }
+
+    @GetMapping("/runs/{runId}/event-time-alerts")
+    public R<FlinkEventTimeMonitor.History> eventTimeAlerts(@PathVariable String projectId, @PathVariable String id,
+                                                            @PathVariable String runId) {
+        return R.ok(runs.eventTimeAlerts(projectId, id, runId));
+    }
+
+    @PutMapping("/runs/{runId}/event-time-alerts")
+    public R<FlinkEventTimeMonitor.History> configureEventTimeAlerts(@PathVariable String projectId, @PathVariable String id,
+            @PathVariable String runId, @RequestBody EventTimeRule rule) {
+        if (rule.enabled() == null) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "启用状态必填");
+        }
+        return R.ok(runs.configureEventTimeAlerts(projectId, id, runId, rule.enabled(), rule.vertexId()));
+    }
+
+    @GetMapping("/runs/{runId}/event-time")
+    public R<FlinkEventTimeSample> eventTime(@PathVariable String projectId, @PathVariable String id,
+                                            @PathVariable String runId, @RequestParam String vertexId) {
+        return R.ok(runs.eventTime(projectId, id, runId, vertexId));
+    }
+
     @GetMapping("/runs/{runId}/metrics")
     public R<FlinkMetricsView> metrics(@PathVariable String projectId, @PathVariable String id,
                                         @PathVariable String runId, @RequestParam(required = false) String vertexId) {
@@ -80,6 +123,10 @@ public class FlinkDeploymentController {
                                   @PathVariable String runId, @RequestBody SubmitRequest request) {
         return R.ok(runs.resume(projectId, id, runId, request.requestId()));
     }
+
+    public record EventTimeRule(Boolean enabled, String vertexId) {}
+
+    public record KafkaRule(Boolean enabled, String vertexId, Long highThreshold, Long lowThreshold) {}
 
     public record SubmitRequest(String requestId) {}
 }

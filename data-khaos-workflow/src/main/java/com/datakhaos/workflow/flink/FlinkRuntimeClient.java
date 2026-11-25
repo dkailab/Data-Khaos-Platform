@@ -12,6 +12,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Locale;
@@ -185,28 +186,17 @@ public class FlinkRuntimeClient {
     }
 
     public FlinkPressureSample pressure(String id) {
-        checkJobId(id);
-        JsonNode job = call(jobManager, "GET", "/jobs/" + id, null);
-        if (!id.equals(job.path("jid").asText()) || !job.path("vertices").isArray()) {
-            throw unavailable("Flink 未返回有效执行图");
-        }
-        return FlinkPressureSample.from(job, System.currentTimeMillis());
+        return FlinkPressureSample.from(jobDetails(id), System.currentTimeMillis());
     }
 
     public FlinkMetricsView metrics(String id, String vertexId) {
-        checkJobId(id);
-        String path = "/jobs/" + id;
-        JsonNode job = call(jobManager, "GET", path, null);
-        if (!id.equals(job.path("jid").asText()) || !job.path("vertices").isArray()) {
-            throw unavailable("Flink 未返回有效执行图");
-        }
-        var vertices = FlinkMetricsView.vertices(job);
+        var vertices = FlinkMetricsView.vertices(jobDetails(id));
         var selected = vertices.stream()
                 .filter(vertex -> vertexId == null || vertex.id().equals(vertexId))
                 .findFirst().orElse(null);
         FlinkMetricsView.Sample sample = null;
         if (selected != null && "RUNNING".equals(selected.status())) {
-            String metricsPath = path + "/vertices/" + selected.id() + "/subtasks/metrics";
+            String metricsPath = metricsPath(id, selected.id());
             // Flink 1.20 may return an empty result if any requested metric is absent.
             var metrics = FlinkMetricsView.availableMetrics(call(jobManager, "GET", metricsPath, null));
             if (!metrics.get().isEmpty()) {
@@ -218,6 +208,53 @@ public class FlinkRuntimeClient {
         return new FlinkMetricsView(vertices, selected == null ? null : selected.id(),
                 sample);
     }
+
+    public Optional<FlinkEventTimeSample> eventTime(String jobId, String vertexId) {
+        checkJobId(vertexId);
+        JsonNode job = jobDetails(jobId);
+        for (JsonNode vertex : job.path("vertices")) {
+            if (!vertexId.equals(vertex.path("id").asText())) continue;
+            JsonNode metrics = json.createArrayNode();
+            if ("RUNNING".equals(job.path("state").asText()) && "RUNNING".equals(vertex.path("status").asText())) {
+                String path = metricsPath(jobId, vertexId);
+                metrics = call(jobManager, "GET", path + "?get=currentInputWatermark&agg=min", null);
+                if (!metrics.isArray()) throw unavailable("Flink 未返回有效水位线样本");
+            }
+            return Optional.of(FlinkEventTimeSample.from(vertex, metrics, Instant.now()));
+        }
+        return Optional.empty();
+    }
+
+    public KafkaReading kafkaLag(String jobId, String vertexId) {
+        JsonNode job = jobDetails(jobId);
+        String state = job.path("state").asText();
+        var vertex = FlinkMetricsView.vertices(job).stream().filter(v -> v.id().equals(vertexId)).findFirst().orElse(null);
+        if (!"RUNNING".equals(state) || vertex == null || !"RUNNING".equals(vertex.status())) {
+            return new KafkaReading(state, null, false, null);
+        }
+        String path = metricsPath(jobId, vertex.id());
+        var request = FlinkMetricsView.kafkaMetrics(call(jobManager, "GET", path, null));
+        if (request.operatorMetricsTruncated() || request.get().isEmpty()) {
+            return new KafkaReading(state, vertex.name(), false, null);
+        }
+        var values = call(jobManager, "GET", path + "?get=" + request.get() + "&agg=max", null);
+        return new KafkaReading(state, vertex.name(), true, FlinkMetricsView.kafkaLag(values, request));
+    }
+
+    private JsonNode jobDetails(String id) {
+        checkJobId(id);
+        JsonNode job = call(jobManager, "GET", "/jobs/" + id, null);
+        if (!id.equals(job.path("jid").asText()) || !job.path("vertices").isArray()) {
+            throw unavailable("Flink 未返回有效执行图");
+        }
+        return job;
+    }
+
+    private String metricsPath(String id, String vertex) {
+        return "/jobs/" + id + "/vertices/" + vertex + "/subtasks/metrics";
+    }
+
+    public record KafkaReading(String jobState, String vertexName, boolean supported, Long lag) {}
 
     public void cancel(String id) {
         checkJobId(id);

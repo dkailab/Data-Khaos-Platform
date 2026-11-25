@@ -115,12 +115,20 @@ public class NotificationService {
             case RECOVERED -> "Flink 检查点已恢复";
             case PRESSURE_OPEN -> "Flink 作业持续反压";
             case PRESSURE_CLEAR -> "Flink 作业反压已恢复";
+            case KAFKA_OPEN -> "Flink Kafka 积压持续偏高";
+            case KAFKA_CLEAR -> "Flink Kafka 积压已恢复";
+            case WMARK_OPEN -> "Flink 水位线持续停滞";
+            case WMARK_CLEAR -> "Flink 水位线已恢复推进";
         };
         String detail = switch (event.type()) {
             case OPEN -> " 的检查点巡检已触发告警。";
             case RECOVERED -> " 已产生新的成功检查点。";
             case PRESSURE_OPEN -> " 的执行节点反压持续偏高，请检查下游处理速度。";
             case PRESSURE_CLEAR -> " 的执行节点反压已回落。";
+            case KAFKA_OPEN -> " 的 Kafka 最大分区积压连续超过告警阈值。";
+            case KAFKA_CLEAR -> " 的 Kafka 最大分区积压已连续回落至恢复阈值。";
+            case WMARK_OPEN -> " 持续收到新输入，但最慢输入水位线停滞。";
+            case WMARK_CLEAR -> " 的输入水位线已经超过停滞位置。";
         };
         String content = "运行 " + event.runId() + detail + " 告警 ID " + event.alertId() + "。";
         var record = siteRecord(event.receiverId(), title, content);

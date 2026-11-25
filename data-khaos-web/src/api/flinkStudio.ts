@@ -214,3 +214,84 @@ export function getFlinkPressureAlerts(project: string, id: string, runId: strin
   return get<FlinkPressureAlerts>(`${asset(project, id)}/runs/${encodeURIComponent(runId)}/pressure-alerts`,
     undefined, { signal })
 }
+
+export interface FlinkKafkaAlerts {
+  available: boolean
+  watch: {
+    vertexId: string
+    vertexName: string
+    highThreshold: number
+    lowThreshold: number
+    enabled: boolean
+    lastLag: number | null
+    sampledAtMs: number
+  } | null
+  alerts: {
+    id: string
+    vertexName: string
+    peakLag: number
+    status: 'OPEN' | 'RECOVERED' | 'ENDED' | 'DISABLED'
+    openedAt: string
+    closedAt: string | null
+  }[]
+}
+
+function kafkaAlertsPath(project: string, id: string, runId: string) {
+  return `${asset(project, id)}/runs/${encodeURIComponent(runId)}/kafka-alerts`
+}
+
+export function getFlinkKafkaAlerts(project: string, id: string, runId: string, signal: AbortSignal) {
+  return get<FlinkKafkaAlerts>(kafkaAlertsPath(project, id, runId), undefined, { signal })
+}
+
+export function configureFlinkKafkaAlerts(project: string, id: string, runId: string, rule:
+  { enabled: false } | { enabled: true; vertexId: string; highThreshold: number; lowThreshold: number }) {
+  return put<FlinkKafkaAlerts>(kafkaAlertsPath(project, id, runId), rule)
+}
+
+export interface FlinkEventTimeSample {
+  vertexId: string
+  status: string
+  sampledAt: string
+  vertexStartedAt: string | null
+  parallelism: number
+  inputRecords: number | null
+  inputWatermark: string | null
+}
+
+export function getFlinkEventTime(project: string, id: string, runId: string, vertexId: string, signal: AbortSignal) {
+  return get<FlinkEventTimeSample>(`${asset(project, id)}/runs/${encodeURIComponent(runId)}/event-time`,
+    { vertexId }, { signal })
+}
+
+export interface FlinkEventTimeHistory {
+  available: boolean
+  watch: { vertexId: string; enabled: boolean } | null
+  points: {
+    vertexId: string
+    sampledAtMs: number
+    watermarkMs: number | null
+    inputDelta: number | null
+    diagnosis: 'BASELINE' | 'PROGRESSING' | 'IDLE' | 'WAITING' | 'STALLED' | 'UNKNOWN'
+  }[]
+  alerts: {
+    id: string
+    vertexId: string
+    stalledWatermarkMs: number
+    status: 'OPEN' | 'RECOVERED' | 'DISABLED' | 'ENDED'
+    openedAt: string
+    closedAt: string | null
+  }[]
+}
+
+function eventTimeAlertsPath(project: string, id: string, runId: string) {
+  return `${asset(project, id)}/runs/${encodeURIComponent(runId)}/event-time-alerts`
+}
+
+export function getFlinkEventTimeAlerts(project: string, id: string, runId: string, signal: AbortSignal) {
+  return get<FlinkEventTimeHistory>(eventTimeAlertsPath(project, id, runId), undefined, { signal })
+}
+
+export function configureFlinkEventTimeAlerts(project: string, id: string, runId: string, enabled: boolean, vertexId?: string) {
+  return put<FlinkEventTimeHistory>(eventTimeAlertsPath(project, id, runId), { enabled, vertexId })
+}

@@ -116,3 +116,25 @@ SQL 作业的 `definition` 包含 `mode`（`STREAMING` 或 `BATCH`）、`paralle
 按两次采样之间的反压耗时增量计算各节点的子任务平均反压比例。连续三个采样区间的最高节点反压均达到 50% 时告警，所有在运行节点连续两个区间降到 20% 或以下时恢复。采样至少间隔 20 秒，超过 120 秒重新建立基线。计数重置、并行度改变或节点缺少指标时，该节点当前区间无法用于确认恢复。作业结束会关闭未恢复的告警。
 
 在 **运行与记录 → 运行指标 → 持续反压告警** 查看峰值节点、比例和最近 30 条状态记录。接口为 `GET /runs/{runId}/pressure-alerts`。配置站内通知后，系统会将告警和恢复发送给作业提交人。
+
+### Kafka 积压告警
+
+为已有 MySQL 库执行 `db/migrate-flink-kafka-alert.sql`，再在 workflow 服务配置 `FLINK_KAFKA_ALERT_ENABLED=true`。新建 Compose 库自动执行迁移。进入 **运行与记录 → 运行指标**，选择上报 Kafka 最大分区积压指标的执行节点，设置告警阈值和更低的恢复阈值后启用。每条运行可配置一条规则，修改阈值或切换监控节点前先停用，旧告警记录仍可查看。新运行需要单独配置规则。
+
+规则使用 Flink 上报的 `records-lag-max`，取该节点已发现的 Kafka 算子中的最大值，单位为条。它基于消费者当前读取偏移。连续三个有效样本达到告警阈值时开启告警，连续两个有效样本降到恢复阈值时恢复。零值是有效样本，指标缺失、连接中断或有指标未返回时本轮无法确认恢复。启用站内通知后，作业提交人会收到告警及恢复消息。 [Kafka 消费指标](https://kafka.apache.org/39/operations/monitoring/#consumer-monitoring)
+
+开发权限允许查询 `GET /runs/{runId}/kafka-alerts`。同时具备开发和调度权限可通过同一路径的 `PUT` 启用或停用规则，启用参数为 `{enabled, vertexId, highThreshold, lowThreshold}`，停用只需 `{enabled: false}`。
+
+### 水位线停滞诊断
+
+在 **运行与记录 → 运行指标 → 水位线停滞诊断** 选择正在运行的下游节点并开始观测。每次请求读取该节点的完整输入计数和最慢输入水位线，每隔 15 秒发起下一次采样，最多 12 次。停止观测或关闭弹窗后取消采样，切换节点重新建立基线。界面展示各次采样的水位线、相对采样时刻的滞后、输入增量和诊断。接口为 `GET /runs/{runId}/event-time?vertexId=...`，沿用项目开发权限。 [Flink 事件时间排查](https://nightlies.apache.org/flink/flink-docs-release-1.20/ops/debugging/debugging_event_time.html)
+
+连续三个有效区间有新输入且最慢水位线不变时显示持续停滞。完全无新增输入且水位线不变时显示未观察到新输入。节点重启、并行度变化、计数回退、采样中断或指标不完整时重新判断，不把缺失数据当成零值。部分分区空闲可能阻塞其他活跃分区的水位线，排查时需结合事件时间字段、分区空闲配置和反压。此功能是按需诊断，观测记录保留在当前弹窗。 [Flink 空闲分区](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/concepts/time_attributes/) · [阿里云 Flink 指标](https://help.aliyun.com/zh/flink/realtime-flink/user-guide/metrics)
+
+### 水位线后台巡检
+
+已有 MySQL 库执行 `db/migrate-flink-event-time-alert.sql`，然后在 workflow 服务配置 `FLINK_EVENT_TIME_ALERT_ENABLED=true`。在 **运行与记录 → 运行指标 → 水位线巡检与告警** 选中上报输入计数和水位线的运行节点，再启用巡检。每条运行可启用一个节点，切换前先停用。关闭浏览器后仍继续巡检。
+
+后台轮询间隔为 30 秒，每批最多轮询 12 条运行。连续三个有效区间有输入但水位线不变时告警。后续有效样本确认推进且超过停滞位置时恢复。空闲、指标缺失、采样间隔超过 120 秒或节点执行尝试变化会中断连续判定。作业或节点结束与手动停用单独记录。开通站内通知后，告警和恢复发送给作业提交人。
+
+每条运行最多保留 120 条后台样本和最近 30 条告警供页面查询。GET `/runs/{runId}/event-time-alerts` 读取历史。PUT 同一路径提交 `{enabled, vertexId}`，停用可省略节点 ID。读取需要项目开发权限，配置还需项目调度权限。
