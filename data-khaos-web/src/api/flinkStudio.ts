@@ -1,8 +1,9 @@
 import { get, post, put } from './request'
 import type { PageResult } from '@/types'
 
-export type FlinkAssetKind = 'JOB' | 'FUNCTION'
+export type FlinkAssetKind = 'JOB' | 'FUNCTION' | 'JAR_JOB'
 export type FlinkMode = 'STREAMING' | 'BATCH'
+export type FlinkFunctionType = 'UDF' | 'UDTF' | 'UDAF'
 export type FlinkLanguage = 'JAVA' | 'SCALA'
 
 export interface FlinkAsset {
@@ -12,6 +13,7 @@ export interface FlinkAsset {
   kind: FlinkAssetKind
   currentVersion: number
   currentMode?: FlinkMode
+  functionType?: FlinkFunctionType | null
   updateTime: string
 }
 
@@ -28,6 +30,8 @@ export interface FlinkDefinition {
   language?: FlinkLanguage
   className?: string
   jarUri?: string
+  functionType?: FlinkFunctionType | null
+  jarJob?: { jarId: string; entryClass: string; arguments: string[] }
 }
 
 export interface FlinkRevision {
@@ -174,4 +178,39 @@ export interface FlinkMetricsView {
 export function getFlinkMetrics(project: string, id: string, runId: string, vertexId: string, signal: AbortSignal) {
   return get<FlinkMetricsView>(`${asset(project, id)}/runs/${encodeURIComponent(runId)}/metrics`,
     vertexId ? { vertexId } : undefined, { signal })
+}
+
+export interface FlinkCheckpointAlertHistory {
+  enabled: boolean
+  alerts: {
+    id: string
+    status: 'OPEN' | 'RECOVERED' | 'ENDED'
+    firstFailedCheckpointId: number
+    lastFailedCheckpointId: number
+    openedAt: string
+    closedAt: string | null
+    recoveryCheckpointId: number | null
+  }[]
+}
+
+export function getFlinkCheckpointAlerts(project: string, id: string, runId: string, signal: AbortSignal) {
+  return get<FlinkCheckpointAlertHistory>(`${asset(project, id)}/runs/${encodeURIComponent(runId)}/checkpoint-alerts`,
+    undefined, { signal })
+}
+
+export interface FlinkPressureAlerts {
+  enabled: boolean
+  alerts: {
+    id: string
+    vertexId: string
+    peakPercent: number
+    status: 'OPEN' | 'RECOVERED' | 'ENDED'
+    openedAt: string
+    closedAt: string | null
+  }[]
+}
+
+export function getFlinkPressureAlerts(project: string, id: string, runId: string, signal: AbortSignal) {
+  return get<FlinkPressureAlerts>(`${asset(project, id)}/runs/${encodeURIComponent(runId)}/pressure-alerts`,
+    undefined, { signal })
 }

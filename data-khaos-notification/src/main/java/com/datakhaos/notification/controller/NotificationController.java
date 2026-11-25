@@ -2,6 +2,8 @@ package com.datakhaos.notification.controller;
 
 import cn.hutool.core.util.StrUtil;
 import com.datakhaos.common.model.PageResult;
+import com.datakhaos.common.exception.BusinessException;
+import com.datakhaos.common.model.ResultCode;
 import com.datakhaos.common.model.R;
 import com.datakhaos.common.security.MetadataHolder;
 import com.datakhaos.notification.dto.SendRequest;
@@ -15,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.time.LocalDateTime;
 
 /**
  * 推送系统接口
@@ -72,6 +75,22 @@ public class NotificationController {
                                                   @RequestParam(required = false) Integer status) {
         return R.ok(notificationService.recordPage(current, size, resolveUser(receiverId), channel, status));
     }
+
+    @GetMapping("/inbox")
+    public R<PageResult<InboxMessage>> inbox(@RequestParam(defaultValue = "1") long current,
+                                             @RequestParam(defaultValue = "10") long size) {
+        String receiver = MetadataHolder.getUserId();
+        if (StrUtil.isBlank(receiver)) throw new BusinessException(ResultCode.UNAUTHORIZED);
+        if (current < 1 || current > Integer.MAX_VALUE || size < 1 || size > 50) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "分页参数无效");
+        }
+        var page = notificationService.inboxPage(current, size, receiver);
+        return R.ok(PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), page.getRecords().stream()
+                .map(row -> new InboxMessage(row.getId(), row.getTitle(), row.getContent(), row.getSendTime()))
+                .toList()));
+    }
+
+    public record InboxMessage(String id, String title, String content, LocalDateTime sendTime) {}
 
     @Operation(summary = "我的订阅")
     @GetMapping("/subscription/user/{userId}")

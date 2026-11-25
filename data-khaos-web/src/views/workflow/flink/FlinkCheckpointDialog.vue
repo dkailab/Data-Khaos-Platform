@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import DkButton from '@/paas-ui/DkButton.vue'
-import { getFlinkCheckpoints, type FlinkCheckpointView } from '@/api/flinkStudio'
+import {
+  getFlinkCheckpointAlerts, getFlinkCheckpoints, type FlinkCheckpointAlertHistory, type FlinkCheckpointView,
+} from '@/api/flinkStudio'
 
 const props = defineProps<{ project: string; assetId: string; runId: string }>()
 const emit = defineEmits<{ close: [] }>()
 const view = ref<FlinkCheckpointView>()
+const history = ref<FlinkCheckpointAlertHistory>()
+const historyError = ref('')
+const historyLoading = ref(false)
 const loading = ref(false)
 const error = ref('')
 const attempt = ref(0)
@@ -26,6 +31,23 @@ watch([() => props.project, () => props.assetId, () => props.runId, attempt], as
   }
 }, { immediate: true })
 
+watch([() => props.project, () => props.assetId, () => props.runId, attempt], async ([project, id, run], _, onCleanup) => {
+  const request = new AbortController()
+  onCleanup(() => request.abort())
+  history.value = undefined
+  historyError.value = ''
+  historyLoading.value = true
+  try {
+    const result = await getFlinkCheckpointAlerts(project, id, run, request.signal)
+    if (!request.signal.aborted) history.value = result
+  } catch (e) {
+    if (!request.signal.aborted) historyError.value = e instanceof Error ? e.message : '告警读取失败'
+  } finally {
+    if (!request.signal.aborted) historyLoading.value = false
+  }
+}, { immediate: true })
+
+const alertLabels = { OPEN: '告警中', RECOVERED: '已恢复', ENDED: '作业已结束' } as const
 const summaries = computed(() => [
   ['已完成', view.value?.counts?.completed],
   ['失败', view.value?.counts?.failed],
@@ -65,11 +87,36 @@ function time(value?: string | null) {
         <el-table-column label="大小 (B)" min-width="88"><template #default="{ row }">{{ row.checkpointedBytes ?? '—' }}</template></el-table-column>
       </el-table>
     </template>
+    <section class="checkpoint-alerts" aria-labelledby="checkpoint-alert-heading">
+      <h3 id="checkpoint-alert-heading">检查点告警</h3>
+      <p v-if="historyLoading" role="status">正在读取告警记录。</p>
+      <el-alert v-else-if="historyError" type="error" :title="historyError" :closable="false" show-icon />
+      <p v-else-if="history && !history.enabled">未启用检查点告警巡检。</p>
+      <el-table v-else-if="history?.enabled" :data="history.alerts" row-key="id" size="small" empty-text="暂无检查点告警">
+        <el-table-column label="状态" min-width="94">
+          <template #default="{ row }">{{ alertLabels[row.status as keyof typeof alertLabels] }}</template>
+        </el-table-column>
+        <el-table-column label="失败检查点" min-width="120">
+          <template #default="{ row }">#{{ row.firstFailedCheckpointId }} – #{{ row.lastFailedCheckpointId }}</template>
+        </el-table-column>
+        <el-table-column label="触发时间" min-width="138">
+          <template #default="{ row }">{{ time(row.openedAt) }}</template>
+        </el-table-column>
+        <el-table-column label="关闭时间" min-width="138">
+          <template #default="{ row }">{{ time(row.closedAt) }}</template>
+        </el-table-column>
+        <el-table-column label="恢复检查点" min-width="105">
+          <template #default="{ row }">{{ row.recoveryCheckpointId == null ? '—' : '#' + row.recoveryCheckpointId }}</template>
+        </el-table-column>
+      </el-table>
+    </section>
     <template #footer><DkButton :loading="loading" @click="attempt++">刷新诊断</DkButton></template>
   </el-dialog>
 </template>
 
 <style scoped>
+.checkpoint-alerts { margin-top: var(--dk-space-4); min-width: 0; }
+.checkpoint-alerts h3 { font-size: 15px; margin: 0 0 var(--dk-space-2); }
 .checkpoint-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));

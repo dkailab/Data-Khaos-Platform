@@ -12,7 +12,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -20,25 +25,89 @@ import java.util.regex.Pattern;
 @Component
 public class FlinkRuntimeClient {
     private static final Pattern JOB_ID = Pattern.compile("[0-9a-f]{32}");
+    private static final Pattern JAR_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,250}\\.jar");
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
     private final ObjectMapper json;
     private final String projectId;
     private final String sqlGateway;
     private final String jobManager;
     private final String clusterKey;
+    private final Set<String> allowedJars;
 
     public FlinkRuntimeClient(ObjectMapper json, @Value("${FLINK_RUN_PROJECT_ID:}") String projectId,
                               @Value("${FLINK_RUN_SQL_GATEWAY:}") String sqlGateway,
-                              @Value("${FLINK_RUN_JOBMANAGER:}") String jobManager) {
+                              @Value("${FLINK_RUN_JOBMANAGER:}") String jobManager,
+                              @Value("${FLINK_RUN_ALLOWED_JARS:}") String allowedJars) {
         this.json = json;
         this.projectId = projectId.strip();
         this.sqlGateway = endpoint(sqlGateway);
         this.jobManager = endpoint(jobManager);
+        this.allowedJars = Arrays.stream(allowedJars.split(",")).map(String::strip).filter(id -> !id.isEmpty())
+                .collect(Collectors.toUnmodifiableSet());
+        if (!this.allowedJars.stream().allMatch(FlinkRuntimeClient::validJarId)) {
+            throw new IllegalArgumentException("FLINK_RUN_ALLOWED_JARS 包含无效的 JAR ID");
+        }
         this.clusterKey = DigestUtil.sha256Hex(this.projectId + "\n" + this.sqlGateway + "\n" + this.jobManager);
     }
 
     public boolean enabled(String project) {
-        return projectId.equals(project) && !projectId.isEmpty() && !sqlGateway.isEmpty() && !jobManager.isEmpty();
+        return bound(project) && !sqlGateway.isEmpty();
+    }
+
+    public boolean bound(String project) {
+        return projectId.equals(project) && !projectId.isEmpty() && !jobManager.isEmpty();
+    }
+
+    public boolean jarEnabled(String project) {
+        return bound(project) && !allowedJars.isEmpty();
+    }
+
+    public static boolean validJarId(String value) {
+        return value != null && JAR_ID.matcher(value).matches();
+    }
+
+    public boolean jarAllowed(String id) {
+        return allowedJars.contains(id);
+    }
+
+    public void requireJar(String id) {
+        if (!jarAllowed(id)) throw unavailable("JAR 未获准在当前集群运行");
+        JsonNode files = call(jobManager, "GET", "/jars", null).path("files");
+        if (!files.isArray()) throw unavailable("Flink 未返回 JAR 制品列表");
+        for (JsonNode file : files) {
+            if (id.equals(file.path("id").asText())) return;
+        }
+        throw unavailable("集群上找不到指定 JAR，请核对制品 ID");
+    }
+
+    public void submitJar(FlinkDefinition definition, String expectedJobId, String recoveryPath) {
+        var jar = definition.jarJob();
+        if (!jarAllowed(jar.jarId())) throw unavailable("JAR 未获准在当前集群运行");
+        checkJobId(expectedJobId);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("jobId", expectedJobId);
+        payload.put("entryClass", jar.entryClass());
+        payload.put("programArgsList", jar.arguments());
+        payload.put("parallelism", definition.parallelism());
+        payload.put("flinkConfiguration", Map.of("execution.runtime-mode",
+                definition.mode().name().toLowerCase(Locale.ROOT)));
+        if (recoveryPath != null) {
+            payload.put("savepointPath", recoveryPath);
+            payload.put("allowNonRestoredState", false);
+        }
+        String accepted = call(jobManager, "POST", "/jars/" + jar.jarId() + "/run", payload, Duration.ofSeconds(22))
+                .path("jobid").asText();
+        if (!expectedJobId.equals(accepted)) throw unavailable("Flink 返回的运行 ID 不匹配");
+    }
+
+    public Optional<EngineJob> findById(String id) {
+        checkJobId(id);
+        JsonNode jobs = call(jobManager, "GET", "/jobs/overview", null).path("jobs");
+        if (!jobs.isArray()) throw unavailable("Flink 未返回作业列表");
+        for (JsonNode row : jobs) {
+            if (id.equals(row.path("jid").asText())) return Optional.of(engine(id, row.path("state").asText()));
+        }
+        return Optional.empty();
     }
 
     public String clusterKey() {
@@ -113,6 +182,15 @@ public class FlinkRuntimeClient {
     public FlinkCheckpointView checkpoints(String id) {
         checkJobId(id);
         return FlinkCheckpointView.from(call(jobManager, "GET", "/jobs/" + id + "/checkpoints", null));
+    }
+
+    public FlinkPressureSample pressure(String id) {
+        checkJobId(id);
+        JsonNode job = call(jobManager, "GET", "/jobs/" + id, null);
+        if (!id.equals(job.path("jid").asText()) || !job.path("vertices").isArray()) {
+            throw unavailable("Flink 未返回有效执行图");
+        }
+        return FlinkPressureSample.from(job, System.currentTimeMillis());
     }
 
     public FlinkMetricsView metrics(String id, String vertexId) {
@@ -191,10 +269,14 @@ public class FlinkRuntimeClient {
     }
 
     private JsonNode call(String base, String method, String path, Object input) {
+        return call(base, method, path, input, Duration.ofSeconds(4));
+    }
+
+    private JsonNode call(String base, String method, String path, Object input, Duration timeout) {
         try {
             HttpRequest.BodyPublisher body = input == null ? HttpRequest.BodyPublishers.noBody()
                     : HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(input));
-            var request = HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(4))
+            var request = HttpRequest.newBuilder(URI.create(base + path)).timeout(timeout)
                     .header("Content-Type", "application/json").method(method, body).build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {

@@ -1,6 +1,9 @@
 package com.datakhaos.workflow.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import cn.hutool.crypto.digest.DigestUtil;
+import com.datakhaos.workflow.flink.FlinkDefinition;
+import com.datakhaos.workflow.entity.FlinkAsset.Kind;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.datakhaos.common.exception.BusinessException;
 import com.datakhaos.common.model.PageResult;
@@ -18,6 +21,9 @@ import com.datakhaos.workflow.flink.FlinkRuntimeClient;
 import com.datakhaos.workflow.flink.FlinkRuntimeClient.EngineJob;
 import com.datakhaos.workflow.flink.FlinkRuntimeClient.RuntimeFailure;
 import com.datakhaos.workflow.mapper.FlinkAssetMapper;
+import com.datakhaos.workflow.runner.FlinkCheckpointMonitor;
+import com.datakhaos.workflow.runner.FlinkPressureMonitor;
+import com.datakhaos.workflow.runner.FlinkCheckpointMonitor.AlertHistory;
 import com.datakhaos.workflow.mapper.FlinkDeploymentMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
@@ -41,20 +47,23 @@ public class FlinkDeploymentService {
     private final FlinkStudioService studio;
     private final WorkflowProjectAccess access;
     private final FlinkRuntimeClient runtime;
+    private final FlinkCheckpointMonitor checkpointMonitor;
+    private final FlinkPressureMonitor pressureMonitor;
 
     public RunPage page(String project, String assetId, long current, long size) {
         authorize(project, DEVELOP);
         if (current < 1 || size < 1 || size > 100) {
             throw new BusinessException(ResultCode.VALIDATE_FAILED, "分页参数无效");
         }
-        if (!assets.exists(Wrappers.<FlinkAsset>lambdaQuery().eq(FlinkAsset::getId, assetId)
-                .eq(FlinkAsset::getProjectId, project).eq(FlinkAsset::getKind, FlinkAsset.Kind.JOB))) {
+        FlinkAsset asset = assets.selectOne(Wrappers.<FlinkAsset>lambdaQuery().eq(FlinkAsset::getId, assetId)
+                .eq(FlinkAsset::getProjectId, project).in(FlinkAsset::getKind, Kind.JOB, Kind.JAR_JOB));
+        if (asset == null) {
             throw new BusinessException(ResultCode.NOT_FOUND, "Flink 作业不存在或不可见");
         }
         var page = runs.selectPage(new Page<>(current, size), Wrappers.<FlinkDeployment>lambdaQuery()
                 .eq(FlinkDeployment::getProjectId, project).eq(FlinkDeployment::getAssetId, assetId)
                 .orderByDesc(FlinkDeployment::getCreateTime, FlinkDeployment::getId));
-        return new RunPage(runtime.enabled(project), PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(),
+        return new RunPage(asset.getKind() == Kind.JAR_JOB ? runtime.jarEnabled(project) : runtime.enabled(project), PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(),
                 page.getRecords().stream().map(FlinkRunView::of).toList()));
     }
 
@@ -80,17 +89,54 @@ public class FlinkDeploymentService {
         String sourceId = source == null ? null : source.getId();
         FlinkDeployment prior = byRequest(project, requestId);
         if (prior != null) return sameRequest(prior, assetId, version, sourceId);
-        if (!runtime.enabled(project)) {
-            throw new BusinessException(ResultCode.FORBIDDEN, "当前项目未绑定 Flink 运行集群");
+        var job = studio.detail(project, assetId, version);
+        boolean jar = job.kind() == Kind.JAR_JOB;
+        if (job.kind() == Kind.FUNCTION) throw new BusinessException(ResultCode.VALIDATE_FAILED, "函数不能提交运行");
+        if (jar ? !runtime.jarEnabled(project) : !runtime.enabled(project)) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "当前项目未启用此类 Flink 作业提交");
         }
-        FlinkRunSql script = FlinkRunSql.parse(studio.exportSql(project, assetId, version));
+        if (jar && !runtime.jarAllowed(job.definition().jarJob().jarId())) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "JAR 未获准在当前集群运行");
+        }
+        FlinkRunSql script = jar ? null : FlinkRunSql.parse(studio.exportSql(project, job));
         FlinkDeployment run = register(project, assetId, version, requestId, sourceId);
         if (run == null) {
             prior = byRequest(project, requestId);
             if (prior != null) return sameRequest(prior, assetId, version, sourceId);
             throw new BusinessException(409, "此作业已有活动运行，请先查看或刷新运行记录");
         }
-        return execute(run, script, source == null ? null : source.getSavepointPath());
+        String recoveryPath = source == null ? null : source.getSavepointPath();
+        return jar ? executeJar(run, job.definition(), recoveryPath) : execute(run, script, recoveryPath);
+    }
+
+    private FlinkRunView executeJar(FlinkDeployment run, FlinkDefinition job, String recoveryPath) {
+        try {
+            runtime.requireJar(job.jarJob().jarId());
+        } catch (RuntimeFailure e) {
+            transition(run, State.FAILED, null, null, e.getMessage());
+            return reload(run);
+        }
+        if (!transition(run, State.SUBMITTING, null, null, null)) return reload(run);
+        run.setRowVersion(run.getRowVersion() + 1);
+        String expectedJobId = jarJobId(run);
+        try {
+            runtime.submitJar(job, expectedJobId, recoveryPath);
+            transition(run, State.SUBMITTED, expectedJobId, null, null);
+        } catch (RuntimeFailure e) {
+            transition(run, State.RECONCILING, null, null, "Flink JAR 提交结果待确认，请刷新运行");
+        }
+        return reload(run);
+    }
+
+    private Optional<EngineJob> observe(FlinkDeployment run) {
+        if (run.getEngineJobId() != null) return Optional.of(runtime.job(run.getEngineJobId()));
+        var asset = assets.selectById(run.getAssetId());
+        if (asset != null && asset.getKind() == Kind.JAR_JOB) return runtime.findById(jarJobId(run));
+        return runtime.findByName(engineName(run));
+    }
+
+    private String jarJobId(FlinkDeployment run) {
+        return DigestUtil.sha256Hex("dk-flink-jar-" + run.getId()).substring(0, 32);
     }
 
     private FlinkRunView execute(FlinkDeployment run, FlinkRunSql script, String recoveryPath) {
@@ -139,14 +185,13 @@ public class FlinkDeploymentService {
         requireBinding(run);
         if (run.getState() == State.PREPARING) {
             if (run.getCreateTime().isBefore(LocalDateTime.now().minusMinutes(2))) {
-                transition(run, State.FAILED, null, null, "提交前准备中断，未发送作业写入语句");
+                transition(run, State.FAILED, null, null, "提交前准备中断，未发送作业提交请求");
             }
             return reload(run);
         }
         try {
             if (run.getState() == State.STOP_REQUESTED) return refreshStop(run);
-            Optional<EngineJob> observed = run.getEngineJobId() == null
-                    ? runtime.findByName(engineName(run)) : Optional.of(runtime.job(run.getEngineJobId()));
+            Optional<EngineJob> observed = observe(run);
             if (observed.isPresent()) {
                 EngineJob job = observed.get();
                 if (run.getEngineJobId() != null && !run.getEngineJobId().equals(job.id())) {
@@ -167,6 +212,17 @@ public class FlinkDeploymentService {
         } catch (RuntimeFailure e) {
             throw new BusinessException(ResultCode.SYSTEM_ERROR, e.getMessage());
         }
+    }
+
+    public AlertHistory checkpointAlerts(String project, String assetId, String id) {
+        authorize(project, DEVELOP);
+        FlinkDeployment run = find(project, assetId, id);
+        return checkpointMonitor.history(run.getId());
+    }
+
+    public FlinkPressureMonitor.History pressureAlerts(String project, String assetId, String id) {
+        authorize(project, DEVELOP);
+        return pressureMonitor.history(find(project, assetId, id).getId());
     }
 
     public FlinkCheckpointView checkpoints(String project, String assetId, String id) {
@@ -356,7 +412,7 @@ public class FlinkDeploymentService {
     }
 
     private void requireBinding(FlinkDeployment run) {
-        if (!runtime.enabled(run.getProjectId()) || !runtime.clusterKey().equals(run.getClusterKey())) {
+        if (!runtime.bound(run.getProjectId()) || !runtime.clusterKey().equals(run.getClusterKey())) {
             throw new BusinessException(409, "运行所属集群不可用，请核对绑定配置");
         }
     }

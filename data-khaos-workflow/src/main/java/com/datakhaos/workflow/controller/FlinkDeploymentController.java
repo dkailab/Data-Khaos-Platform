@@ -5,6 +5,8 @@ import com.datakhaos.workflow.flink.FlinkRunView;
 import com.datakhaos.workflow.flink.FlinkCheckpointView;
 import com.datakhaos.workflow.flink.FlinkMetricsView;
 import com.datakhaos.workflow.service.FlinkDeploymentService;
+import com.datakhaos.workflow.runner.FlinkCheckpointMonitor.AlertHistory;
+import com.datakhaos.workflow.runner.FlinkPressureMonitor;
 import com.datakhaos.workflow.service.FlinkDeploymentService.RunPage;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -39,10 +41,22 @@ public class FlinkDeploymentController {
         return R.ok(runs.refresh(projectId, id, runId));
     }
 
+    @GetMapping("/runs/{runId}/checkpoint-alerts")
+    public R<AlertHistory> checkpointAlerts(@PathVariable String projectId, @PathVariable String id,
+                                            @PathVariable String runId) {
+        return R.ok(runs.checkpointAlerts(projectId, id, runId));
+    }
+
     @GetMapping("/runs/{runId}/checkpoints")
     public R<FlinkCheckpointView> checkpoints(@PathVariable String projectId, @PathVariable String id,
                                               @PathVariable String runId) {
         return R.ok(runs.checkpoints(projectId, id, runId));
+    }
+
+    @GetMapping("/runs/{runId}/pressure-alerts")
+    public R<FlinkPressureMonitor.History> pressureAlerts(@PathVariable String projectId, @PathVariable String id,
+                                                         @PathVariable String runId) {
+        return R.ok(runs.pressureAlerts(projectId, id, runId));
     }
 
     @GetMapping("/runs/{runId}/metrics")

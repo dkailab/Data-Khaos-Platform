@@ -78,6 +78,9 @@ services:
       - ../db/migrate-materialization-publication.sql:/docker-entrypoint-initdb.d/26-materialization-publication.sql:ro
       - ../db/migrate-flink-studio.sql:/docker-entrypoint-initdb.d/27-flink-studio.sql:ro
       - ../db/migrate-flink-deployment.sql:/docker-entrypoint-initdb.d/28-flink-deployment.sql:ro
+      - ../db/migrate-flink-checkpoint-alert.sql:/docker-entrypoint-initdb.d/29-flink-checkpoint-alert.sql:ro
+      - ../db/migrate-flink-alert-notification.sql:/docker-entrypoint-initdb.d/30-flink-alert-notification.sql:ro
+      - ../db/migrate-flink-pressure-alert.sql:/docker-entrypoint-initdb.d/31-flink-pressure-alert.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
@@ -249,6 +252,9 @@ services:
       args:
         MODULE: data-khaos-notification
     container_name: dk-notification
+    environment:
+      <<: *app-env
+      FLINK_ALERT_NOTIFICATION_TOKEN: ${FLINK_ALERT_NOTIFICATION_TOKEN:-}
     # 通知客户端通过网关访问。服务间通知使用容器网络。
 
   # ---------- 数据质量 ----------
@@ -292,6 +298,10 @@ services:
       FLINK_RUN_PROJECT_ID: ${FLINK_RUN_PROJECT_ID:-}
       FLINK_RUN_SQL_GATEWAY: ${FLINK_RUN_SQL_GATEWAY:-}
       FLINK_RUN_JOBMANAGER: ${FLINK_RUN_JOBMANAGER:-}
+      FLINK_RUN_ALLOWED_JARS: ${FLINK_RUN_ALLOWED_JARS:-}
+      FLINK_CHECKPOINT_ALERT_ENABLED: ${FLINK_CHECKPOINT_ALERT_ENABLED:-false}
+      FLINK_PRESSURE_ALERT_ENABLED: ${FLINK_PRESSURE_ALERT_ENABLED:-false}
+      FLINK_ALERT_NOTIFICATION_TOKEN: ${FLINK_ALERT_NOTIFICATION_TOKEN:-}
     ports:
       # 本地验收可用，远程请求走网关，内部调用用容器网络。
       - "127.0.0.1:8093:8093"

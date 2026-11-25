@@ -42,3 +42,14 @@ export function subscribeNotify(data: NotifySubscription) {
 export function unsubscribeNotify(id: string) {
   return del<void>(`/notify/subscription/${id}`)
 }
+
+export interface InboxMessage {
+  id: string
+  title: string
+  content: string
+  sendTime: string | null
+}
+
+export function pageInbox(current: number, size: number, signal: AbortSignal) {
+  return get<PageResult<InboxMessage>>('/notify/inbox', { current, size }, { signal })
+}

@@ -11,6 +11,8 @@ import com.datakhaos.workflow.entity.FlinkAsset.Kind;
 import com.datakhaos.workflow.entity.FlinkAssetVersion;
 import com.datakhaos.workflow.flink.FlinkDefinition;
 import com.datakhaos.workflow.flink.FlinkDefinition.FunctionRef;
+import com.datakhaos.workflow.flink.FlinkDefinition.JarJob;
+import com.datakhaos.workflow.flink.FlinkRuntimeClient;
 import com.datakhaos.workflow.flink.FlinkVersionView;
 import com.datakhaos.workflow.flink.FlinkVersionView.Revision;
 import com.datakhaos.workflow.mapper.FlinkAssetMapper;
@@ -30,6 +32,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -55,6 +58,21 @@ public class FlinkStudioService {
                 .and(keyword != null && !keyword.isBlank(), query -> query
                         .like(FlinkAsset::getName, keyword).or().like(FlinkAsset::getCode, keyword))
                 .orderByDesc(FlinkAsset::getUpdateTime, FlinkAsset::getId));
+        if (kind == Kind.FUNCTION && !page.getRecords().isEmpty()) {
+            var rows = page.getRecords();
+            var definitions = versions.selectList(Wrappers.<FlinkAssetVersion>lambdaQuery()
+                    .select(FlinkAssetVersion::getAssetId, FlinkAssetVersion::getVersionNumber,
+                            FlinkAssetVersion::getDefinitionJson)
+                    .and(query -> rows.forEach(row -> query.or(pair -> pair
+                            .eq(FlinkAssetVersion::getAssetId, row.getId())
+                            .eq(FlinkAssetVersion::getVersionNumber, row.getCurrentVersion())))));
+            var byAsset = definitions.stream().collect(Collectors.toMap(
+                    FlinkAssetVersion::getAssetId, this::readDefinition));
+            rows.forEach(row -> {
+                var definition = byAsset.get(row.getId());
+                if (definition != null) row.setFunctionType(definition.functionType());
+            });
+        }
         return PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), page.getRecords());
     }
 
@@ -126,13 +144,16 @@ public class FlinkStudioService {
     }
 
     public String exportSql(String projectId, String id, int number) {
-        FlinkVersionView job = detail(projectId, id, number);
+        return exportSql(projectId, detail(projectId, id, number));
+    }
+
+    String exportSql(String projectId, FlinkVersionView job) {
         if (job.kind() != Kind.JOB) {
-            throw invalid("仅作业版本可以导出 SQL");
+            throw invalid("仅 SQL 作业版本可以导出 SQL");
         }
         FlinkDefinition definition = job.definition();
         var output = new StringBuilder()
-                .append("-- Flink job ").append(job.code()).append(" v").append(number).append('\n')
+                .append("-- Flink job ").append(job.code()).append(" v").append(job.revision().version()).append('\n')
                 .append("SET 'execution.runtime-mode' = '")
                 .append(definition.mode().name().toLowerCase(Locale.ROOT)).append("';\n")
                 .append("SET 'parallelism.default' = '").append(definition.parallelism()).append("';\n");
@@ -241,7 +262,7 @@ public class FlinkStudioService {
             throw invalid("定义必填");
         }
         if (kind == Kind.FUNCTION) {
-            if (input.sql() != null || input.mode() != null || input.parallelism() != null
+            if (input.jarJob() != null || input.sql() != null || input.mode() != null || input.parallelism() != null
                     || (input.functions() != null && !input.functions().isEmpty())) {
                 throw invalid("函数定义只能包含注册参数");
             }
@@ -249,14 +270,33 @@ public class FlinkStudioService {
             if (input.language() == null || !JVM_CLASS.matcher(className).matches()) {
                 throw invalid("请选择函数语言并填写 JVM 全限定类名");
             }
-            return new FlinkDefinition(null, null, null, null, input.language(), className, jarUri(input.jarUri()));
+            return new FlinkDefinition(null, null, null, null, input.language(), className, jarUri(input.jarUri()),
+                    input.functionType(), null);
         }
-        if (input.language() != null || input.className() != null || input.jarUri() != null) {
+        if (input.functionType() != null || input.language() != null || input.className() != null || input.jarUri() != null) {
             throw invalid("作业通过函数版本引用登记 UDF");
         }
         if (input.mode() == null || input.parallelism() == null || input.parallelism() < 1 || input.parallelism() > 1024) {
             throw invalid("请选择流或批模式，并填写 1 至 1024 的并行度");
         }
+        if (kind == Kind.JAR_JOB) {
+            if (input.sql() != null || (input.functions() != null && !input.functions().isEmpty()) || input.jarJob() == null) {
+                throw invalid("JAR 作业须配置制品，且不能包含 SQL 或函数引用");
+            }
+            var jar = input.jarJob();
+            String jarId = required(jar.jarId(), 255, "Flink JAR ID");
+            if (!FlinkRuntimeClient.validJarId(jarId)) throw invalid("Flink JAR ID 格式无效");
+            String entry = required(jar.entryClass(), 255, "入口类");
+            if (!JVM_CLASS.matcher(entry).matches()) throw invalid("请填写 JVM 全限定入口类名");
+            var arguments = jar.arguments() == null ? List.<String>of() : jar.arguments();
+            if (arguments.size() > 64 || arguments.stream().anyMatch(arg -> arg == null
+                    || arg.length() > 2048 || arg.indexOf(0) >= 0)) {
+                throw invalid("最多 64 个启动参数，每项不超过 2048 字符且不能含 NUL");
+            }
+            return new FlinkDefinition(input.mode(), input.parallelism(), null, null, null, null, null,
+                    null, new JarJob(jarId, entry, List.copyOf(arguments)));
+        }
+        if (input.jarJob() != null) throw invalid("SQL 作业不接受 JAR 作业配置");
         String sql = required(input.sql(), MAX_SQL_LENGTH, "SQL");
         List<FunctionRef> refs = new ArrayList<>();
         if (input.functions() != null) {
@@ -276,7 +316,7 @@ public class FlinkStudioService {
                 refs.add(new FunctionRef(function.getId(), ref.version()));
             }
         }
-        return new FlinkDefinition(input.mode(), input.parallelism(), sql, List.copyOf(refs), null, null, null);
+        return new FlinkDefinition(input.mode(), input.parallelism(), sql, List.copyOf(refs), null, null, null, null, null);
     }
 
     private String jarUri(String value) {

@@ -1,6 +1,8 @@
 package com.datakhaos.notification.service;
 
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.crypto.digest.DigestUtil;
+import com.datakhaos.workflow.api.model.FlinkAlertEvent;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.datakhaos.common.exception.BusinessException;
@@ -16,6 +18,7 @@ import com.datakhaos.notification.mapper.NotifyTemplateMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
@@ -24,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 推送服务：模板管理、多渠道发送、推送记录与用户订阅。
@@ -102,6 +106,39 @@ public class NotificationService {
 
     /** 站内通知与调用方的业务记录在同一事务提交。 */
     public void recordSiteMessage(String receiverId, String title, String content) {
+        recordMapper.insert(siteRecord(receiverId, title, content));
+    }
+
+    public void recordFlinkAlertEvent(FlinkAlertEvent event) {
+        String title = switch (event.type()) {
+            case OPEN -> "Flink 检查点连续失败";
+            case RECOVERED -> "Flink 检查点已恢复";
+            case PRESSURE_OPEN -> "Flink 作业持续反压";
+            case PRESSURE_CLEAR -> "Flink 作业反压已恢复";
+        };
+        String detail = switch (event.type()) {
+            case OPEN -> " 的检查点巡检已触发告警。";
+            case RECOVERED -> " 已产生新的成功检查点。";
+            case PRESSURE_OPEN -> " 的执行节点反压持续偏高，请检查下游处理速度。";
+            case PRESSURE_CLEAR -> " 的执行节点反压已回落。";
+        };
+        String content = "运行 " + event.runId() + detail + " 告警 ID " + event.alertId() + "。";
+        var record = siteRecord(event.receiverId(), title, content);
+        record.setId("f-" + DigestUtil.sha256Hex(event.alertId() + ":" + event.type().name()).substring(0, 30));
+        try {
+            recordMapper.insert(record);
+        } catch (DuplicateKeyException duplicate) {
+            var saved = recordMapper.selectById(record.getId());
+            if (saved == null || !"SITE".equals(saved.getChannel())
+                    || !Objects.equals(saved.getReceiverId(), record.getReceiverId())
+                    || !Objects.equals(saved.getTitle(), record.getTitle())
+                    || !Objects.equals(saved.getContent(), record.getContent())) {
+                throw duplicate;
+            }
+        }
+    }
+
+    private NotifyRecord siteRecord(String receiverId, String title, String content) {
         NotifyRecord record = new NotifyRecord();
         record.setReceiverId(receiverId);
         record.setReceiverType("USER");
@@ -110,7 +147,7 @@ public class NotificationService {
         record.setContent(content);
         record.setStatus(1);
         record.setSendTime(LocalDateTime.now());
-        recordMapper.insert(record);
+        return record;
     }
 
     /** 按渠道投递并更新记录状态 */
@@ -154,12 +191,22 @@ public class NotificationService {
     // ==================== 记录 ====================
 
     public PageResult<NotifyRecord> recordPage(long current, long size, String receiverId, String channel, Integer status) {
+        return recordPage(current, size, receiverId, channel, status, null);
+    }
+
+    public PageResult<NotifyRecord> inboxPage(long current, long size, String receiverId) {
+        return recordPage(current, size, receiverId, "SITE", 1, "USER");
+    }
+
+    private PageResult<NotifyRecord> recordPage(long current, long size, String receiverId, String channel,
+                                                 Integer status, String receiverType) {
         Page<NotifyRecord> page = recordMapper.selectPage(new Page<>(current, size),
                 new LambdaQueryWrapper<NotifyRecord>()
                         .eq(StrUtil.isNotBlank(receiverId), NotifyRecord::getReceiverId, receiverId)
                         .eq(StrUtil.isNotBlank(channel), NotifyRecord::getChannel, channel)
+                        .eq(receiverType != null, NotifyRecord::getReceiverType, receiverType)
                         .eq(status != null, NotifyRecord::getStatus, status)
-                        .orderByDesc(NotifyRecord::getCreateTime));
+                        .orderByDesc(NotifyRecord::getCreateTime, NotifyRecord::getId));
         return PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), page.getRecords());
     }
 

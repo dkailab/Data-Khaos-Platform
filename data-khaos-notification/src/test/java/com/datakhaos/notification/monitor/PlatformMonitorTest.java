@@ -4,6 +4,10 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.MybatisSqlSessionFactoryBuilder;
 import com.datakhaos.common.exception.GlobalExceptionHandler;
 import com.datakhaos.common.security.JwtUtil;
+import com.datakhaos.common.security.MetadataContextFilter;
+import com.datakhaos.notification.controller.InternalFlinkNotificationController;
+import com.datakhaos.notification.controller.NotificationController;
+import com.datakhaos.workflow.api.model.FlinkAlertEvent;
 import com.datakhaos.notification.mapper.NotifyRecordMapper;
 import com.datakhaos.notification.service.NotificationService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -87,7 +91,10 @@ class PlatformMonitorTest {
         context.refresh();
 
         service = context.getBean(MonitorService.class);
-        mvc = MockMvcBuilders.standaloneSetup(new MonitorController(service, SECRET))
+        var notifications = context.getBean(NotificationService.class);
+        mvc = MockMvcBuilders.standaloneSetup(new MonitorController(service, SECRET),
+                        new InternalFlinkNotificationController(notifications, SECRET), new NotificationController(notifications))
+                .addFilters(new MetadataContextFilter())
                 .setControllerAdvice(new GlobalExceptionHandler()).build();
     }
 
@@ -169,6 +176,54 @@ class PlatformMonitorTest {
         assertEquals("1", first.at("/data/acknowledgedBy").asText());
         assertEquals(first.at("/data/acknowledgedAt"), repeated.at("/data/acknowledgedAt"));
         assertEquals(1, service.alerts(1, 10, true).getTotal());
+    }
+
+    @Test
+    void requiresServiceTokenDeduplicatesEventsAndScopesTheInbox() throws Exception {
+        var open = new FlinkAlertEvent("alert-1", "run-1", "operator-1", FlinkAlertEvent.Type.OPEN);
+        var recovered = new FlinkAlertEvent("alert-1", "run-1", "operator-1", FlinkAlertEvent.Type.RECOVERED);
+        assertEquals(403, body(event(open).header("X-User-Id", "1")).path("code").asInt());
+        assertEquals(403, body(event(open).header(FlinkAlertEvent.TOKEN_HEADER, SECRET + "invalid"))
+                .path("code").asInt());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM notify_record", Integer.class));
+
+        var concurrent = Executors.newFixedThreadPool(2);
+        try {
+            var first = concurrent.submit(() -> body(event(open).header(FlinkAlertEvent.TOKEN_HEADER, SECRET)));
+            var retry = concurrent.submit(() -> body(event(open).header(FlinkAlertEvent.TOKEN_HEADER, SECRET)));
+            assertTrue(first.get(5, TimeUnit.SECONDS).at("/data").asBoolean());
+            assertTrue(retry.get(5, TimeUnit.SECONDS).at("/data").asBoolean());
+        } finally {
+            concurrent.shutdownNow();
+        }
+        assertTrue(body(event(recovered).header(FlinkAlertEvent.TOKEN_HEADER, SECRET)).at("/data").asBoolean());
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM notify_record WHERE receiver_id = 'operator-1'", Integer.class));
+
+        jdbc.update("""
+                INSERT INTO notify_record(id, receiver_id, receiver_type, channel, status)
+                VALUES ('role-record', 'operator-1', 'ROLE', 'SITE', 1)
+                """);
+        var inbox = "/api/notify/inbox";
+        assertEquals(401, body(get(inbox).param("receiverId", "operator-1")).path("code").asInt());
+        assertEquals(0, body(get(inbox).header("X-User-Id", "other").param("receiverId", "operator-1"))
+                .at("/data/records").size());
+        assertEquals(2, body(get(inbox).header("X-User-Id", "operator-1")).at("/data/records").size());
+    }
+
+    @Test
+    void pressureMessagesHaveIndependentOpeningAndRecoveryRecords() throws Exception {
+        var open = new FlinkAlertEvent("pressure-1", "run-1", "operator-1", FlinkAlertEvent.Type.PRESSURE_OPEN);
+        var clear = new FlinkAlertEvent("pressure-1", "run-1", "operator-1", FlinkAlertEvent.Type.PRESSURE_CLEAR);
+        for (var transition : List.of(open, clear, open, clear)) {
+            assertTrue(body(event(transition).header(FlinkAlertEvent.TOKEN_HEADER, SECRET)).at("/data").asBoolean());
+        }
+        var titles = jdbc.queryForList("SELECT title FROM notify_record WHERE receiver_id = 'operator-1'", String.class);
+        assertEquals(2, titles.size());
+        assertTrue(titles.containsAll(List.of("Flink 作业持续反压", "Flink 作业反压已恢复")));
+    }
+
+    private MockHttpServletRequestBuilder event(FlinkAlertEvent event) throws Exception {
+        return post(FlinkAlertEvent.NOTIFICATION_PATH).contentType("application/json").content(json.writeValueAsBytes(event));
     }
 
     @Test

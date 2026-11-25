@@ -7,7 +7,7 @@ import FlinkMetricsDialog from './FlinkMetricsDialog.vue'
 import { cancelFlinkRun, listFlinkRuns, refreshFlinkRun, resumeFlinkRun, stopFlinkRun, submitFlinkRun } from '@/api/flinkStudio'
 import type { FlinkRun, FlinkRunState } from '@/api/flinkStudio'
 
-const props = defineProps<{ project: string; assetId: string; version: number; canRun: boolean; streaming: boolean }>()
+const props = defineProps<{ project: string; assetId: string; version: number; canRun: boolean; jarJob?: boolean; streaming: boolean }>()
 const runs = ref<FlinkRun[]>([])
 const enabled = ref(false)
 const total = ref(0)
@@ -157,7 +157,7 @@ onBeforeUnmount(() => { sequence++; closed = true })
       </DkButton>
     </header>
     <el-alert v-if="error" type="error" :title="error" :closable="false" show-icon />
-    <p v-else-if="!loading && !enabled" class="runs-hint">当前项目未绑定 Flink 运行集群。</p>
+    <p v-else-if="!loading && !enabled" class="runs-hint">{{ jarJob ? '当前项目尚未启用 JAR 提交，请核对集群绑定和已授权的 JAR ID。' : '当前项目未绑定 Flink 运行集群。' }}</p>
     <p v-else-if="!canRun" class="runs-hint">提交及取消需要项目调度权限。</p>
     <el-table v-loading="loading" :data="runs" row-key="id" empty-text="暂无作业运行">
       <el-table-column label="版本" width="72"><template #default="{ row }">v{{ row.version }}</template></el-table-column>

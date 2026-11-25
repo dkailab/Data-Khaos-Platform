@@ -10,12 +10,18 @@ import {
   restoreFlinkVersion, saveFlinkAsset,
 } from '@/api/flinkStudio'
 import type {
-  FlinkAsset, FlinkAssetKind, FlinkDefinition, FlinkLanguage, FlinkMode, FlinkRevision, FlinkVersionView, FunctionRef,
+  FlinkAsset, FlinkAssetKind, FlinkDefinition, FlinkFunctionType, FlinkLanguage, FlinkMode, FlinkRevision, FlinkVersionView, FunctionRef,
 } from '@/api/flinkStudio'
 
 const projects = ref<ProjectWorkspace[]>([])
 const project = ref('')
 const kind = ref<FlinkAssetKind>('JOB')
+const kindTitle: Record<FlinkAssetKind, string> = { JOB: 'SQL 作业', JAR_JOB: 'JAR 作业', FUNCTION: '函数库' }
+const functionTypes = [
+  { value: 'UDF', label: 'UDF · 标量函数' },
+  { value: 'UDTF', label: 'UDTF · 表值函数' },
+  { value: 'UDAF', label: 'UDAF · 聚合函数' },
+]
 const assets = ref<FlinkAsset[]>([])
 const keyword = ref('')
 const nextKeyword = ref('')
@@ -33,7 +39,8 @@ const saving = ref(false)
 const formError = ref('')
 const form = reactive({
   code: '', name: '', note: '', mode: 'STREAMING' as FlinkMode, parallelism: 1,
-  sql: '', functions: [] as FunctionRef[], language: 'JAVA' as FlinkLanguage, className: '', jarUri: '',
+  sql: '', functions: [] as FunctionRef[], language: 'JAVA' as FlinkLanguage, className: '', jarUri: '', functionType: '' as FlinkFunctionType | '',
+  jarId: '', entryClass: '', arguments: [] as string[],
 })
 const functionOptions = ref<FlinkAsset[]>([])
 let functionSequence = 0
@@ -55,7 +62,8 @@ let selectionSequence = 0
 
 const canSave = computed(() => !!form.name.trim() && !!form.note.trim() && (!!editing.value || !!form.code.trim())
   && (kind.value === 'JOB' ? !!form.sql.trim() && !!form.parallelism && form.functions.every(item => item.assetId && item.version)
-    : !!form.className.trim()))
+    : kind.value === 'JAR_JOB' ? !!form.jarId.trim() && !!form.entryClass.trim() && !!form.parallelism
+      : !!form.className.trim()))
 
 async function loadProjects() {
   projectLoading.value = true
@@ -139,6 +147,8 @@ async function openEditor(row?: FlinkAsset) {
       code: version?.code ?? '', name: version?.revision.name ?? '', note: '', mode: def?.mode ?? 'STREAMING',
       parallelism: def?.parallelism ?? 1, sql: def?.sql ?? '', functions: def?.functions?.map(item => ({ ...item })) ?? [],
       language: def?.language ?? 'JAVA', className: def?.className ?? '', jarUri: def?.jarUri ?? '',
+      functionType: def?.functionType ?? (version ? '' : 'UDF'),
+      jarId: def?.jarJob?.jarId ?? '', entryClass: def?.jarJob?.entryClass ?? '', arguments: [...(def?.jarJob?.arguments ?? [])],
     })
     formError.value = ''
     functionOptions.value = []
@@ -153,7 +163,11 @@ async function save() {
   if (saving.value || !canSave.value) return
   const definition: FlinkDefinition = kind.value === 'JOB'
     ? { sql: form.sql, mode: form.mode, parallelism: form.parallelism, functions: form.functions }
-    : { language: form.language, className: form.className, jarUri: form.jarUri || undefined }
+    : kind.value === 'JAR_JOB'
+      ? { mode: form.mode, parallelism: form.parallelism,
+          jarJob: { jarId: form.jarId, entryClass: form.entryClass, arguments: [...form.arguments] } }
+      : { language: form.language, className: form.className, jarUri: form.jarUri || undefined,
+          functionType: form.functionType || undefined }
   const input = { name: form.name, note: form.note, definition }
   saving.value = true
   formError.value = ''
@@ -280,7 +294,7 @@ onMounted(() => void loadProjects())
 
 <template>
   <div class="flink-studio">
-    <DkPageHeader title="Flink 开发" description="管理流作业、批作业和函数版本。">
+    <DkPageHeader title="Flink 开发" description="管理 SQL 作业、JAR 作业和函数版本。">
       <template #actions>
         <el-select v-model="project" aria-label="开发项目" placeholder="选择开发项目" :loading="projectLoading" class="project-select">
           <el-option v-for="row in projects" :key="row.projectGroupId" :label="row.name" :value="row.projectGroupId" />
@@ -294,7 +308,8 @@ onMounted(() => void loadProjects())
     </el-empty>
     <el-card v-if="project" shadow="never">
       <el-tabs v-model="kind">
-        <el-tab-pane name="JOB" label="Flink 作业" />
+        <el-tab-pane name="JOB" label="SQL 作业" />
+        <el-tab-pane name="JAR_JOB" label="JAR 作业" />
         <el-tab-pane name="FUNCTION" label="函数库" />
       </el-tabs>
       <div class="asset-tools">
@@ -302,13 +317,16 @@ onMounted(() => void loadProjects())
           <el-input v-model="nextKeyword" aria-label="搜索资产" placeholder="名称或编码" clearable @clear="search" />
           <DkButton type="submit">搜索</DkButton>
         </form>
-        <DkButton variant="primary" @click="openEditor()">{{ kind === 'JOB' ? '新建作业' : '登记函数' }}</DkButton>
+        <DkButton variant="primary" @click="openEditor()">{{ kind === 'FUNCTION' ? '登记函数' : '新建 ' + kindTitle[kind] }}</DkButton>
       </div>
-      <el-table v-loading="loading" :data="assets" row-key="id" :empty-text="kind === 'JOB' ? '暂无 Flink 作业' : '暂无登记函数'">
+      <el-table v-loading="loading" :data="assets" row-key="id" :empty-text="'暂无' + kindTitle[kind]">
         <el-table-column prop="name" label="名称" min-width="160" />
         <el-table-column prop="code" label="编码" min-width="140" />
-        <el-table-column v-if="kind === 'JOB'" label="运行模式" width="85">
+        <el-table-column v-if="kind !== 'FUNCTION'" label="运行模式" width="85">
           <template #default="{ row }">{{ row.currentMode === 'BATCH' ? '批处理' : '流式' }}</template>
+        </el-table-column>
+        <el-table-column v-if="kind === 'FUNCTION'" label="函数类型" width="110">
+          <template #default="{ row }">{{ row.functionType || '待分类' }}</template>
         </el-table-column>
         <el-table-column label="当前版本" width="90"><template #default="{ row }">v{{ row.currentVersion }}</template></el-table-column>
         <el-table-column label="更新时间" width="165"><template #default="{ row }">{{ time(row.updateTime) }}</template></el-table-column>
@@ -323,7 +341,7 @@ onMounted(() => void loadProjects())
         layout="prev, pager, next" @current-change="loadAssets" />
     </el-card>
 
-    <el-dialog v-model="editor" :title="editing ? '编辑定义' : kind === 'JOB' ? '新建 Flink 作业' : '登记 Flink 函数'"
+    <el-dialog v-model="editor" :title="editing ? '编辑定义' : kind === 'FUNCTION' ? '登记 Flink 函数' : '新建 Flink ' + kindTitle[kind]"
       width="min(850px, calc(100vw - 28px))" :show-close="!saving" :close-on-click-modal="false" :close-on-press-escape="!saving">
       <el-alert v-if="formError" type="error" :title="formError" :closable="false" show-icon />
       <el-form label-position="top" class="studio-form" @submit.prevent="save">
@@ -333,7 +351,7 @@ onMounted(() => void loadProjects())
           </el-form-item>
           <el-form-item label="名称"><el-input v-model="form.name" aria-label="名称" maxlength="200" /></el-form-item>
         </div>
-        <template v-if="kind === 'JOB'">
+        <template v-if="kind !== 'FUNCTION'">
           <div class="form-grid">
             <el-form-item label="运行模式">
               <el-select v-model="form.mode" aria-label="运行模式">
@@ -342,6 +360,8 @@ onMounted(() => void loadProjects())
             </el-form-item>
             <el-form-item label="并行度"><el-input-number v-model="form.parallelism" aria-label="并行度" :min="1" :max="1024" /></el-form-item>
           </div>
+        </template>
+        <template v-if="kind === 'JOB'">
           <el-form-item label="Flink SQL">
             <el-input v-model="form.sql" aria-label="Flink SQL" type="textarea" :rows="9" maxlength="131072" class="sql-input" />
           </el-form-item>
@@ -358,8 +378,29 @@ onMounted(() => void loadProjects())
             <DkButton :disabled="form.functions.length >= 20" @click="form.functions.push({ assetId: '', version: 1 })">添加函数</DkButton>
           </el-form-item>
         </template>
+        <template v-else-if="kind === 'JAR_JOB'">
+          <el-form-item label="集群 JAR ID">
+            <el-input v-model="form.jarId" aria-label="集群 JAR ID" maxlength="255"
+              placeholder="从已绑定 Flink 集群的 JAR 列表获取" />
+          </el-form-item>
+          <el-form-item label="入口类">
+            <el-input v-model="form.entryClass" aria-label="入口类" maxlength="255" placeholder="com.example.OrdersJob" />
+          </el-form-item>
+          <el-form-item label="启动参数">
+            <div v-for="(_, i) in form.arguments" :key="i" class="dependency">
+              <el-input v-model="form.arguments[i]" :aria-label="'启动参数 ' + (i + 1)" maxlength="2048" />
+              <el-button link type="danger" @click="form.arguments.splice(i, 1)">移除</el-button>
+            </div>
+            <DkButton :disabled="form.arguments.length >= 64" @click="form.arguments.push('')">添加参数</DkButton>
+          </el-form-item>
+        </template>
         <template v-else>
           <div class="form-grid">
+            <el-form-item label="函数类型">
+              <el-select v-model="form.functionType" aria-label="函数类型" placeholder="待分类">
+                <el-option v-for="option in functionTypes" :key="option.value" :value="option.value" :label="option.label" />
+              </el-select>
+            </el-form-item>
             <el-form-item label="语言">
               <el-select v-model="form.language" aria-label="语言">
                 <el-option value="JAVA" label="Java" /><el-option value="SCALA" label="Scala" />
@@ -392,7 +433,7 @@ onMounted(() => void loadProjects())
         <div class="asset-tools">
           <h3>v{{ selected.revision.version }} · {{ selected.revision.name }}</h3>
           <div class="asset-actions">
-            <DkButton v-if="selected.kind === 'JOB'" :aria-expanded="runsOpen" @click="runsOpen = !runsOpen">
+            <DkButton v-if="selected.kind !== 'FUNCTION'" :aria-expanded="runsOpen" @click="runsOpen = !runsOpen">
               {{ runsOpen ? '收起运行记录' : '运行与记录' }}
             </DkButton>
             <DkButton v-if="selected.kind === 'JOB'" :loading="exporting" @click="download">下载 SQL</DkButton>
@@ -400,16 +441,22 @@ onMounted(() => void loadProjects())
           </div>
         </div>
         <p v-if="selected.revision.restoredFrom">恢复自 v{{ selected.revision.restoredFrom }}</p>
-        <template v-if="selected.kind === 'JOB'">
+        <template v-if="selected.kind !== 'FUNCTION'">
           <p>{{ selected.definition.mode === 'BATCH' ? '批处理' : '流式' }} · 并行度 {{ selected.definition.parallelism }}</p>
           <ul v-if="selected.definition.functions?.length" aria-label="固定函数版本">
             <li v-for="dep in selected.definition.functions" :key="dep.assetId">{{ dep.assetId }} · v{{ dep.version }}</li>
           </ul>
-          <pre>{{ selected.definition.sql }}</pre>
+          <pre v-if="selected.kind === 'JOB'">{{ selected.definition.sql }}</pre>
+          <dl v-else-if="selected.definition.jarJob">
+            <dt>集群 JAR ID</dt><dd>{{ selected.definition.jarJob.jarId }}</dd>
+            <dt>入口类</dt><dd>{{ selected.definition.jarJob.entryClass }}</dd>
+            <dt>启动参数</dt><dd>{{ JSON.stringify(selected.definition.jarJob.arguments) }}</dd>
+          </dl>
           <FlinkRunsPanel v-if="runsOpen" :project="project" :asset-id="selected.assetId"
-            :version="selected.revision.version" :can-run="canRun" :streaming="selected.definition.mode === 'STREAMING'" />
+            :version="selected.revision.version" :can-run="canRun" :jar-job="selected.kind === 'JAR_JOB'" :streaming="selected.definition.mode === 'STREAMING'" />
         </template>
         <dl v-else>
+          <dt>函数类型</dt><dd>{{ selected.definition.functionType || '待分类' }}</dd>
           <dt>语言</dt><dd>{{ selected.definition.language }}</dd>
           <dt>JVM 类名</dt><dd>{{ selected.definition.className }}</dd>
           <dt>JAR 地址</dt><dd>{{ selected.definition.jarUri || '使用运行环境类路径' }}</dd>

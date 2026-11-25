@@ -1,6 +1,8 @@
 package com.datakhaos.workflow.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.datakhaos.workflow.flink.FlinkDefinition.FunctionType;
 import com.datakhaos.common.entity.BaseEntity;
 import com.datakhaos.workflow.flink.FlinkDefinition.Mode;
 import lombok.Data;
@@ -18,7 +20,9 @@ public class FlinkAsset extends BaseEntity {
     private String name;
     private Integer currentVersion;
     private Mode currentMode;
+    @TableField(exist = false)
+    private FunctionType functionType;
     private LocalDateTime updateTime;
 
-    public enum Kind { JOB, FUNCTION }
+    public enum Kind { JOB, FUNCTION, JAR_JOB }
 }

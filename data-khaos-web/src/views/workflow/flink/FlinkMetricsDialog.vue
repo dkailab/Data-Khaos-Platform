@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import DkButton from '@/paas-ui/DkButton.vue'
-import { getFlinkMetrics, type FlinkMetricsView } from '@/api/flinkStudio'
+import { getFlinkMetrics, getFlinkPressureAlerts, type FlinkMetricsView, type FlinkPressureAlerts } from '@/api/flinkStudio'
 
 const props = defineProps<{ project: string; assetId: string; runId: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -12,6 +12,10 @@ const sample = ref<FlinkMetricsView['sample']>(null)
 const loading = ref(false)
 const error = ref('')
 const attempt = ref(0)
+const pressure = ref<FlinkPressureAlerts>()
+const pressureLoading = ref(false)
+const pressureError = ref('')
+const alertLabels = { OPEN: '告警中', RECOVERED: '已恢复', ENDED: '作业已结束' } as const
 const current = computed(() => vertices.value.find(vertex => vertex.id === selected.value))
 const selection = computed(() => requested.value || selected.value || '')
 const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 })
@@ -55,6 +59,21 @@ watch([requested, attempt], async (_, __, onCleanup) => {
     if (!request.signal.aborted) error.value = e instanceof Error ? e.message : '运行指标读取失败'
   } finally {
     if (!request.signal.aborted) loading.value = false
+  }
+}, { immediate: true })
+
+watch(attempt, async (_, __, onCleanup) => {
+  const request = new AbortController()
+  onCleanup(() => request.abort())
+  pressureLoading.value = true
+  pressureError.value = ''
+  try {
+    const result = await getFlinkPressureAlerts(props.project, props.assetId, props.runId, request.signal)
+    if (!request.signal.aborted) pressure.value = result
+  } catch (e) {
+    if (!request.signal.aborted) pressureError.value = e instanceof Error ? e.message : '反压告警读取失败'
+  } finally {
+    if (!request.signal.aborted) pressureLoading.value = false
   }
 }, { immediate: true })
 </script>
@@ -104,6 +123,29 @@ watch([requested, attempt], async (_, __, onCleanup) => {
         <p class="metrics-meta">吞吐汇总可用子任务样本。— 表示该指标暂无样本。</p>
       </template>
     </template>
+    <section class="operator-metrics" aria-labelledby="flink-pressure-heading">
+      <h3 id="flink-pressure-heading">持续反压告警</h3>
+      <p v-if="pressureLoading" role="status">正在读取反压告警。</p>
+      <el-alert v-else-if="pressureError" type="error" :title="pressureError" :closable="false" show-icon />
+      <p v-else-if="pressure && !pressure.enabled" class="metrics-meta">未启用持续反压巡检。</p>
+      <el-table v-else-if="pressure?.enabled" :data="pressure.alerts" row-key="id" size="small" empty-text="暂无反压告警">
+        <el-table-column label="状态" min-width="95">
+          <template #default="{ row }">{{ alertLabels[row.status as keyof typeof alertLabels] }}</template>
+        </el-table-column>
+        <el-table-column label="峰值节点" min-width="125" show-overflow-tooltip>
+          <template #default="{ row }">{{ vertices.find(vertex => vertex.id === row.vertexId)?.name ?? row.vertexId }}</template>
+        </el-table-column>
+        <el-table-column label="平均反压峰值" min-width="110">
+          <template #default="{ row }">{{ format(row.peakPercent, '%') }}</template>
+        </el-table-column>
+        <el-table-column label="触发时间" min-width="140">
+          <template #default="{ row }">{{ time(row.openedAt) }}</template>
+        </el-table-column>
+        <el-table-column label="关闭时间" min-width="140">
+          <template #default="{ row }">{{ time(row.closedAt) }}</template>
+        </el-table-column>
+      </el-table>
+    </section>
     <template #footer><DkButton :loading="loading" @click="attempt++">刷新指标</DkButton></template>
   </el-dialog>
 </template>

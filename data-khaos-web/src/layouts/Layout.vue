@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { ArrowDown, Fold, Expand, Menu, Grid } from '@element-plus/icons-vue'
+import { ArrowDown, Fold, Expand, Menu, Grid, Bell } from '@element-plus/icons-vue'
 import { buildWorkspaces, findWorkspace } from '@/modules/workspaces'
 import { getUserPermission } from '@/api/permission'
 import { useModuleStore } from '@/stores/module'
 import { useUserStore } from '@/stores/user'
 import ProductDirectory from './ProductDirectory.vue'
+import NotificationInbox from '@/views/notification/NotificationInbox.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -16,6 +17,7 @@ const menuOpen = ref(false)
 const sidebarCollapsed = ref(false)
 const foldedSections = ref(new Set<string>())
 const directoryOpen = ref(false)
+const inboxOpen = ref(false)
 
 const workspaces = computed(() => buildWorkspaces(
   modules.loaded ? modules.categories : [],
@@ -96,7 +98,7 @@ async function logout() {
     </aside>
     <header class="topbar">
       <div class="context">
-        <button type="button" class="portal-trigger" :aria-expanded="directoryOpen"
+        <button type="button" class="portal-trigger" aria-label="产品服务" :aria-expanded="directoryOpen"
           aria-haspopup="dialog" @click="directoryOpen = true">
           <span class="brand-icon"><Grid aria-hidden="true" /></span>
           <span>产品服务</span><ArrowDown class="portal-chevron" aria-hidden="true" />
@@ -110,13 +112,18 @@ async function logout() {
           :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><Menu aria-hidden="true" /></button>
         <strong v-if="!portalHome" class="page-context">{{ workspace.title }}</strong>
       </div>
-      <el-dropdown trigger="click" @command="logout">
-        <button type="button" class="account">{{ user.userInfo?.realName || user.userInfo?.username || '账户' }}</button>
-        <template #dropdown>
-          <el-dropdown-menu><el-dropdown-item command="logout">退出登录</el-dropdown-item></el-dropdown-menu>
-        </template>
-      </el-dropdown>
+      <div class="account-actions">
+        <button type="button" class="inbox-trigger" aria-label="站内消息" title="站内消息" aria-haspopup="dialog"
+          :aria-expanded="inboxOpen" @click="inboxOpen = true"><Bell aria-hidden="true" /></button>
+        <el-dropdown trigger="click" @command="logout">
+          <button type="button" class="account">{{ user.userInfo?.realName || user.userInfo?.username || '账户' }}</button>
+          <template #dropdown>
+            <el-dropdown-menu><el-dropdown-item command="logout">退出登录</el-dropdown-item></el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
     </header>
+    <NotificationInbox v-if="inboxOpen" @close="inboxOpen = false" />
     <ProductDirectory v-model="directoryOpen" :workspaces="workspaces" :current="workspace.key" />
     <div class="workspace">
       <main id="main-content" class="workspace-content" :class="{ workbench: route.path === '/query/onesql' || portalHome }" tabindex="-1"><RouterView /></main>
@@ -148,6 +155,11 @@ async function logout() {
 .section-trigger[aria-expanded="false"] svg { transform: rotate(-90deg); }
 .sidebar footer { color: var(--dk-muted); border-top: 1px solid var(--dk-border); padding: 10px 5px 0; margin-top: auto; font-size: 11px; }
 .topbar { grid-column: 1 / -1; grid-row: 1; position: sticky; top: 0; z-index: 11; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding-inline: clamp(10px, 2vw, 24px); border-bottom: 1px solid var(--dk-border); background: var(--dk-surface); }
+.account-actions { display: flex; align-items: center; gap: var(--dk-space-2); min-width: 0; }
+.inbox-trigger { display: grid; flex: none; place-items: center; width: 32px; height: 32px; border: 0; border-radius: var(--dk-radius-control); background: transparent; color: var(--dk-ink); cursor: pointer; }
+.inbox-trigger svg { width: 18px; height: 18px; }
+.inbox-trigger:hover { color: var(--dk-primary); background: var(--dk-primary-soft); }
+.account { max-width: min(120px, 24vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context { display: flex; align-items: center; gap: 9px; }
 .page-context { margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--dk-border); font-weight: 550; color: var(--dk-muted); }
 .account, .menu-toggle, .sidebar-toggle { font: inherit; background: var(--dk-surface); color: var(--dk-ink); border: 1px solid var(--dk-border); border-radius: var(--dk-radius-control); padding: 5px 10px; cursor: pointer; }
@@ -167,5 +179,9 @@ async function logout() {
   .page-context { display: none; }
   .portal-brand { font-size: 14px; padding-left: 7px; margin-left: 0; }
   .context { gap: 6px; }
+}
+@media (max-width: 420px) {
+  .portal-trigger > span:not(.brand-icon) { display: none; }
+  .account-actions { gap: 4px; }
 }
 </style>
