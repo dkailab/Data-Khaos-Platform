@@ -94,17 +94,21 @@ public class WarehouseApiService {
     public WarehouseApiVersion edit(String projectId, String code, int version, int revision, WarehouseApiDraft body) {
         String user = requireProject(projectId, true);
         var draft = find(projectId, code, version);
-        Spec spec = spec(body);
-        applyUpdate(update(draft, DRAFT, revision, user, LocalDateTime.now().withNano(0))
-                .set(WarehouseApiVersion::getApiName, spec.name())
-                .set(WarehouseApiVersion::getMaxRows, spec.maxRows())
-                .set(WarehouseApiVersion::getDataMode, spec.mode())
-                .set(WarehouseApiVersion::getRealtimeAssetId, spec.realtimeAssetId())
-                .set(WarehouseApiVersion::getRealtimeBatchAssetId, spec.batchAssetId())
-                .set(WarehouseApiVersion::getObservedTimezone, spec.timezone())
-                .set(WarehouseApiVersion::getAmountUnit, spec.amountUnit())
-                .set(WarehouseApiVersion::getFreshnessFreshSeconds, spec.freshSeconds())
-                .set(WarehouseApiVersion::getFreshnessStaleSeconds, spec.staleSeconds()));
+        if (body == null) throw new BusinessException(ResultCode.VALIDATE_FAILED, "缺少草稿内容");
+        var changes = update(draft, DRAFT, revision, user, LocalDateTime.now().withNano(0))
+                .set(WarehouseApiVersion::getApiName, validateDraft(body.name(), body.maxRows()))
+                .set(WarehouseApiVersion::getMaxRows, body.maxRows());
+        if (body.dataMode() != null) {
+            Spec spec = spec(body);
+            changes.set(WarehouseApiVersion::getDataMode, spec.mode())
+                    .set(WarehouseApiVersion::getRealtimeAssetId, spec.realtimeAssetId())
+                    .set(WarehouseApiVersion::getRealtimeBatchAssetId, spec.batchAssetId())
+                    .set(WarehouseApiVersion::getObservedTimezone, spec.timezone())
+                    .set(WarehouseApiVersion::getAmountUnit, spec.amountUnit())
+                    .set(WarehouseApiVersion::getFreshnessFreshSeconds, spec.freshSeconds())
+                    .set(WarehouseApiVersion::getFreshnessStaleSeconds, spec.staleSeconds());
+        }
+        applyUpdate(changes);
         return mapper.selectById(draft.getId());
     }
 

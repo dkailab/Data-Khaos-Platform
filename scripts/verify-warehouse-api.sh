@@ -204,7 +204,7 @@ if [[ "$API_CREATED" == "1" ]]; then
   if [[ "$RESP_CODE" == "0" && "$PUB_STATUS" == "PUBLISHED" ]]; then
     PUBLISHED=1
     CURRENT_REVISION="$PUB_REV"
-    verdict 1 "发布（revision→$PUB_REV）" "code=0 且 PUBLISHED" "$HTTP_STATUS" "$RESP_CODE" ""
+    verdict 1 "发布（revision→${PUB_REV}）" "code=0 且 PUBLISHED" "$HTTP_STATUS" "$RESP_CODE" ""
   else
     verdict 0 "发布（revision→2）" "code=0 且 PUBLISHED" "$HTTP_STATUS" "$RESP_CODE" "$(jget '.msg // empty')"
   fi
@@ -295,11 +295,22 @@ fi
 
 # ---------------------------------------------------------------- 10. 跨项目隔离
 step "10/13 跨项目应不可见"
-request GET "/api/query/warehouse/v1/projects/${CROSS_PROJECT}/apis/${API_CODE}/versions/${API_VERSION}" "" "$AUTH"
+request GET "/api/query/warehouse/v1/projects/${CROSS_PROJECT}/apis/${API_CODE}/versions/${API_VERSION}/credentials" "" "$AUTH"
 if [[ "$RESP_CODE" == "404" || "$RESP_CODE" == "403" ]]; then
   verdict 1 "跨项目访问被拒" "code=404/403" "$HTTP_STATUS" "$RESP_CODE" "project=$CROSS_PROJECT"
 else
   verdict 0 "跨项目访问被拒" "code=404/403" "$HTTP_STATUS" "$RESP_CODE" "$(jget '.msg // empty')"
+fi
+if [[ -n "$CREDENTIAL_TOKEN" ]]; then
+  request GET "/api/data/v1/projects/${CROSS_PROJECT}/apis/${API_CODE}/versions/${API_VERSION}?bizDate=${BIZ_DATE}" \
+    "" "Bearer $CREDENTIAL_TOKEN"
+  if [[ "$RESP_CODE" == "401" ]]; then
+    verdict 1 "机器凭据跨项目不可用" "code=401" "$HTTP_STATUS" "$RESP_CODE" "project=$CROSS_PROJECT"
+  else
+    verdict 0 "机器凭据跨项目不可用" "code=401" "$HTTP_STATUS" "$RESP_CODE" "$(jget '.msg // empty')"
+  fi
+else
+  verdict 0 "机器凭据跨项目不可用" "前置未就绪" "-" "-" "无凭据"
 fi
 
 # ---------------------------------------------------------------- 11. 吊销凭据

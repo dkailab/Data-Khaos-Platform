@@ -269,6 +269,37 @@ class WarehouseApiLifecycleTest {
     }
 
     @Test
+    void editingOnlyNameAndRowLimitPreservesRealtimeContract() throws Exception {
+        String v1 = ADMIN + VERSION + "1";
+        call(post(v1).contentType(MediaType.APPLICATION_JSON).content("""
+                {"name":"实时契约","maxRows":10,"dataMode":"REALTIME",
+                 "realtimeAssetId":"mt_rt_ads","realtimeBatchAssetId":"mt_batch_ads",
+                 "observedTimezone":"UTC","freshnessFreshSeconds":25,"freshnessStaleSeconds":90}
+                """), "developer", ResultCode.SUCCESS);
+
+        var edited = call(put(v1).param("revision", "1").contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"name":"Renamed realtime","maxRows":30}
+                        """), "developer", ResultCode.SUCCESS);
+        assertEquals("Renamed realtime", edited.path("apiName").asText());
+        assertEquals(30, edited.path("maxRows").asInt());
+        assertEquals(2, edited.path("revision").asInt());
+        assertEquals("REALTIME", edited.path("dataMode").asText());
+        assertEquals("mt_rt_ads", edited.path("realtimeAssetId").asText());
+        assertEquals("mt_batch_ads", edited.path("realtimeBatchAssetId").asText());
+        assertEquals("UTC", edited.path("observedTimezone").asText());
+        assertEquals("CNY", edited.path("amountUnit").asText());
+        assertEquals(25, edited.path("freshnessFreshSeconds").asInt());
+        assertEquals(90, edited.path("freshnessStaleSeconds").asInt());
+
+        var batch = call(put(v1).param("revision", "2").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"离线契约\",\"maxRows\":10,\"dataMode\":\"BATCH\"}"),
+                "developer", ResultCode.SUCCESS);
+        assertEquals("BATCH", batch.path("dataMode").asText());
+        assertTrue(batch.path("realtimeAssetId").isNull());
+    }
+
+    @Test
     void rejectsRealtimeDraftWithoutAssetAndKeepsBatchAsDefault() throws Exception {
         String v1 = ADMIN + VERSION + "1";
         call(realtimeDraft(post(v1), 10, null), "developer", ResultCode.VALIDATE_FAILED);

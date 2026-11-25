@@ -5,6 +5,12 @@ x-flink: &flink
     FLINK_PROPERTIES: |
       jobmanager.rpc.address: jobmanager
       rest.address: jobmanager
+      jobmanager.memory.process.size: 768m
+      taskmanager.memory.process.size: 1024m
+      taskmanager.memory.managed.fraction: 0.2
+      taskmanager.memory.network.min: 64m
+      taskmanager.memory.network.max: 128m
+      env.java.opts.all: -XX:ActiveProcessorCount=2
       taskmanager.numberOfTaskSlots: 4
       parallelism.default: 1
       execution.checkpointing.interval: 2 s
@@ -42,6 +48,7 @@ services:
   kafka:
     image: apache/kafka:3.9.1
     environment:
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093

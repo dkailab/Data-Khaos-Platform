@@ -192,6 +192,49 @@ class RealtimeAdsQueryTest {
     }
 
     @Test
+    void cannotReportMatchWhenEitherSideIsTruncated() {
+        var first = new RealtimeAdsQueryService.RegionSample("east", "100.00", 1, null);
+        var extra = new RealtimeAdsQueryService.RegionSample("west", "200.00", 2, null);
+        var other = new RealtimeAdsQueryService.RegionSample("west", "300.00", 2, null);
+        for (boolean realtimeTruncated : List.of(false, true)) {
+            var left = realtimeTruncated ? List.of(first, extra) : List.of(first);
+            var service = new RealtimeAdsQueryService(null, null) {
+                @Override
+                Table resolve(String assetId) {
+                    return new Table("ds", "orders_serving", assetId);
+                }
+
+                @Override
+                List<RegionSample> readRegions(Table table, LocalDate date, int limit) {
+                    return "mt_realtime_ads".equals(table.table()) ? left : List.of(first, other);
+                }
+
+                @Override
+                EventProgress readEventProgress(Table table, LocalDate date) {
+                    return null;
+                }
+            };
+
+            var reconcile = service.reconcile(contract(1), DATE.toString());
+
+            assertFalse(reconcile.matched());
+            assertEquals(realtimeTruncated, reconcile.realtime().truncated());
+            assertTrue(reconcile.batch().truncated());
+            assertEquals("MATCHED", verdict(reconcile, "east"));
+        }
+    }
+
+    @Test
+    void cannotReportMatchWhenNeitherSideHasProducedData() {
+        var reconcile = service(List.of(), null).reconcile(CONTRACT, DATE.toString());
+
+        assertFalse(reconcile.matched());
+        assertEquals(RealtimeAdsQueryService.STATE_NOT_YET_PRODUCED, reconcile.realtime().state());
+        assertEquals(RealtimeAdsQueryService.STATE_NOT_YET_PRODUCED, reconcile.batch().state());
+        assertTrue(reconcile.regions().isEmpty());
+    }
+
+    @Test
     void reconciliationRequiresAConfiguredBatchBaseline() {
         var service = service(List.of(), null);
         var withoutBatch = new RealtimeAdsQueryService.Contract("mt_realtime_ads", null, "Asia/Shanghai", "CNY", 60, 300, 100);

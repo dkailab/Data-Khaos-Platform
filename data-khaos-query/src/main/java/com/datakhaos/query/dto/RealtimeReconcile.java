@@ -9,7 +9,7 @@ import java.util.List;
  * 这样「数值一致」与「哪一侧更新」可以同时被判断，而不是只比金额。
  *
  * @param bizDate   业务日期
- * @param matched   是否逐地区完全一致（地区集合与金额、订单数都一致）
+ * @param matched   双方已产出、未截断且地区集合、金额、订单数均一致
  * @param realtime  实时侧证据
  * @param batch     批侧证据
  * @param regions   逐地区差异明细，一致的地区也会列出以便核对
@@ -19,7 +19,7 @@ public record RealtimeReconcile(String bizDate, boolean matched, Side realtime, 
 
     /** 一侧的时效与版本证据。 */
     public record Side(String state, String observedAt, Long lagSeconds, String freshness,
-                       int regionCount, String amountUnit) {}
+                       int regionCount, String amountUnit, boolean truncated) {}
 
     /**
      * 逐地区比对结果。

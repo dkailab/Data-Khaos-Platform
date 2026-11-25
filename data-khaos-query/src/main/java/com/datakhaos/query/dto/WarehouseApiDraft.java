@@ -5,8 +5,8 @@ import com.datakhaos.query.entity.WarehouseApiVersion;
 /**
  * API 版本草稿的写入模型。
  *
- * <p>除名称与行数上限外，其余字段均可省略：省略时回落为离线契约（BATCH）的既有行为，
- * 因此老调用方不需要改动。声明为 REALTIME 时才校验实时资产与时效阈值。
+ * <p>创建时省略数据模式使用 BATCH。编辑时省略数据模式只更新名称和行数上限；
+ * 显式提供数据模式时替换契约。声明为 REALTIME 时校验实时资产与时效阈值。
  *
  * @param name                  API 名称
  * @param maxRows               最大返回地区数

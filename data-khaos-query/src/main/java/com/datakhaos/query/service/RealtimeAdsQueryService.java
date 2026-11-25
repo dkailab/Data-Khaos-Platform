@@ -129,11 +129,12 @@ public class RealtimeAdsQueryService {
         EventProgress progress = readEventProgress(realtimeTable, date);
 
         boolean realtimeTruncated = realtimeRows.size() > contract.maxRows();
+        boolean batchTruncated = batchRows.size() > contract.maxRows();
         if (realtimeTruncated) realtimeRows = realtimeRows.subList(0, contract.maxRows());
-        if (batchRows.size() > contract.maxRows()) batchRows = batchRows.subList(0, contract.maxRows());
+        if (batchTruncated) batchRows = batchRows.subList(0, contract.maxRows());
 
         RealtimeRegionGmv realtime = judge(contract, date, zone, realtimeRows, realtimeTruncated, progress, clock);
-        RealtimeRegionGmv batch = judge(contract, date, zone, batchRows, false, null, clock);
+        RealtimeRegionGmv batch = judge(contract, date, zone, batchRows, batchTruncated, null, clock);
 
         Map<String, RegionSample> left = index(realtimeRows);
         Map<String, RegionSample> right = index(batchRows);
@@ -157,14 +158,16 @@ public class RealtimeAdsQueryService {
                         null, other.orderCount(), "ONLY_BATCH"));
             }
         }
-        boolean matched = diffs.values().stream().allMatch(diff -> "MATCHED".equals(diff.verdict()));
+        boolean matched = !realtime.truncated() && !batch.truncated()
+                && !STATE_NOT_YET_PRODUCED.equals(realtime.state()) && !STATE_NOT_YET_PRODUCED.equals(batch.state())
+                && diffs.values().stream().allMatch(diff -> "MATCHED".equals(diff.verdict()));
         return new RealtimeReconcile(date.toString(), matched, side(realtime), side(batch),
                 new ArrayList<>(diffs.values()));
     }
 
     private static RealtimeReconcile.Side side(RealtimeRegionGmv payload) {
         return new RealtimeReconcile.Side(payload.state(), payload.observedAt(), payload.lagSeconds(),
-                payload.freshness(), payload.rowCount(), payload.amountUnit());
+                payload.freshness(), payload.rowCount(), payload.amountUnit(), payload.truncated());
     }
 
     private static Map<String, RegionSample> index(List<RegionSample> rows) {

@@ -122,16 +122,16 @@ curl -H "Authorization: Bearer $JWT" \
 }
 ```
 
-对账响应（两侧各自带时效证据，而不是只比金额）：
+对账响应包含两侧的时效和截断标记。任一侧尚未产出或超出 `maxRows` 时，`matched` 为 `false`，地区明细仍按上限返回。
 
 ```json
 {
   "bizDate": "2026-11-17",
   "matched": true,
   "realtime": { "state": "PRODUCED", "observedAt": "...", "lagSeconds": 12, "freshness": "FRESH",
-                "regionCount": 2, "amountUnit": "CNY" },
+                "regionCount": 2, "amountUnit": "CNY", "truncated": false },
   "batch":    { "state": "PRODUCED", "observedAt": "...", "lagSeconds": 900, "freshness": "STALE",
-                "regionCount": 2, "amountUnit": "CNY" },
+                "regionCount": 2, "amountUnit": "CNY", "truncated": false },
   "regions": [
     { "region": "east", "realtimeGmv": "100.00", "batchGmv": "100.00",
       "realtimeOrderCount": 2, "batchOrderCount": 2, "verdict": "MATCHED" }
@@ -280,7 +280,7 @@ plan 的 PR D 验收还要求「用 CDC 增量修改或取消订单核对实时 
 | 真实环境跑通实时契约与对账 | **未执行**（镜像需重建，见 4.2） |
 | CDC 增量 / 取消订单的场景验证 | **未执行**（需 Flink+Kafka 实验环境） |
 | TaskManager 恢复后与批 ADS 对账 | **未执行**（同上） |
-| 前端实时契约编辑 | **未做**：`WarehouseApiWorkbench.vue` 目前只提交 `name`/`maxRows`，实时字段未接界面 |
+| 前端实时契约编辑 | 工作台编辑名称与行数上限时保留原契约；实时字段可通过 API 显式更新 |
 | 实时契约的权限控制 | 沿用表级校验；行列策略仍未接入（见路线图阶段八） |
 | 网关限流与应用配额叠加 | 实时契约同样受 PR C 配额约束，且同样先撞网关 10rps IP 级粗限流 |
 | 观测时间写入的时钟一致性 | 依赖作业与数据库同一时钟源；跨机部署需 NTP，否则 `lag` 会漂 |

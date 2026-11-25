@@ -11,6 +11,7 @@ import uuid
 
 LAB = Path(__file__).resolve().parent
 TOPIC = "orders.ods.v1"
+FLINK_SUBMIT_TIMEOUT = 360
 
 
 def run(command, *, stdin=None, timeout=45):
@@ -27,7 +28,7 @@ def wait_for(description, predicate, seconds=100):
         try:
             if value := predicate():
                 return value
-        except (OSError, RuntimeError, KeyError, ValueError) as error:
+        except (OSError, RuntimeError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
             last = error
         time.sleep(1)
     raise RuntimeError(f"Timed out: {description}. Last error: {last}")
@@ -43,12 +44,12 @@ class Lab:
 
     def mysql(self, sql):
         return self.compose("exec", "-T", "mysql", "sh", "-ec",
-                            'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql -uroot -NB',
+                            'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --protocol=TCP -h127.0.0.1 --connect-timeout=5 -uroot -NB',
                             stdin="SET time_zone = '+00:00';\n" + sql)
 
     def kafka(self, tool, *args, stdin=None):
         return self.compose("exec", "-T", "kafka", f"/opt/kafka/bin/kafka-{tool}.sh",
-                            "--bootstrap-server", "kafka:9092", *args, stdin=stdin)
+                            "--bootstrap-server", "kafka:9092", *args, stdin=stdin, timeout=120)
 
     def rest(self, path):
         with urllib.request.urlopen(self.rest_url + path, timeout=5) as response:
@@ -56,17 +57,19 @@ class Lab:
 
     def setup(self):
         self.compose("up", "-d", "--no-build", timeout=400)
-        wait_for("MySQL schema and fixture", lambda: self.mysql("SELECT COUNT(*) FROM orders_source.orders;") == "3")
+        # The entrypoint's temporary server does not expose TCP during initialization.
+        wait_for("MySQL schema and fixture",
+                 lambda: self.mysql("SELECT COUNT(*) FROM orders_source.orders;") == "3", seconds=300)
         wait_for("Kafka broker", lambda: self.kafka("topics", "--create", "--if-not-exists",
                                                    "--topic", TOPIC, "--partitions", "1",
                                                    "--replication-factor", "1",
-                                                   "--config", "cleanup.policy=delete") is not None)
+                                                   "--config", "cleanup.policy=delete") is not None, seconds=250)
         self.rest_url = "http://" + self.compose("port", "jobmanager", "8081")
         wait_for("Flink task slots", lambda: self.rest("/overview")["slots-total"] >= 2)
 
     def submit(self):
         self.compose("exec", "-T", "jobmanager", "env", "FLINK_HOME=/opt/flink", "bash",
-                     "/cdc/bin/flink-cdc.sh", "/lab/orders-cdc.yaml", timeout=100)
+                     "/cdc/bin/flink-cdc.sh", "/lab/orders-cdc.yaml", timeout=FLINK_SUBMIT_TIMEOUT)
         cdc = self.job("Orders MySQL CDC")
         self.submit_sql("warehouse.sql")
         warehouse = self.job("Orders realtime warehouse")
@@ -78,7 +81,7 @@ class Lab:
         script = script.replace("-- INCLUDE paid-order-views.sql", shared.rstrip())
         return self.compose("exec", "-T", "jobmanager", "sh", "-ec",
                      """input=$(mktemp); trap 'rm -f "$input"' EXIT; cat > "$input"; /opt/flink/bin/sql-client.sh -f "$input" """,
-                     stdin=script, timeout=110)
+                     stdin=script, timeout=FLINK_SUBMIT_TIMEOUT)
 
     def reconcile_batch(self):
         self.mysql("""
@@ -244,6 +247,9 @@ def main():
     print(f"Compose project {project}; cache {os.environ['DK_CDC_CACHE']}", flush=True)
     try:
         lab.setup()
+        if not args.smoke:
+            # Run the independent window fixture before the long-running jobs share the TaskManager.
+            lab.verify_windows()
         jobs = lab.submit()
         print(f"Flink REST {lab.rest_url}   jobs {' '.join(jobs)}", flush=True)
         lab.assert_current("initial snapshot")
@@ -290,12 +296,15 @@ def main():
         """)
         lab.assert_current("replayed old version and delete tie")
         lab.reconcile_batch()
-        lab.verify_windows()
         print("PASS realtime ADS:\n" + lab.mysql("SELECT * FROM orders_serving.ads_region_day ORDER BY 1,2;"), flush=True)
-    except Exception:
+    except Exception as error:
+        if isinstance(error, subprocess.TimeoutExpired):
+            for output in (error.stdout, error.stderr):
+                if output:
+                    print(output.decode(errors="replace"), flush=True)
         try:
-            print(lab.compose("logs", "--tail", "50", "jobmanager", "taskmanager"), flush=True)
-        except (RuntimeError, OSError):
+            print(lab.compose("logs", "--tail", "50", "mysql", "kafka", "jobmanager", "taskmanager"), flush=True)
+        except (RuntimeError, OSError, subprocess.TimeoutExpired):
             pass
         raise
     finally:

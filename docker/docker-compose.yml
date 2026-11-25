@@ -85,6 +85,8 @@ services:
       - ../db/migrate-flink-event-time-alert.sql:/docker-entrypoint-initdb.d/33-flink-event-time-alert.sql:ro
       - ../db/migrate-warehouse-api-versions.sql:/docker-entrypoint-initdb.d/34-warehouse-api-versions.sql:ro
       - ../db/migrate-warehouse-api-credentials.sql:/docker-entrypoint-initdb.d/35-warehouse-api-credentials.sql:ro
+      - ../db/migrate-warehouse-api-apps.sql:/docker-entrypoint-initdb.d/36-warehouse-api-apps.sql:ro
+      - ../db/migrate-warehouse-api-realtime.sql:/docker-entrypoint-initdb.d/37-warehouse-api-realtime.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
