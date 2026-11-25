@@ -80,11 +80,46 @@ CREATE TABLE ads_region_day (
   region STRING,
   paid_order_count BIGINT,
   gmv_cents DECIMAL(38,0),
+  observed_at TIMESTAMP(3),
   PRIMARY KEY (biz_date, region) NOT ENFORCED
 ) WITH (
   'connector' = 'jdbc',
   'url' = 'jdbc:mysql://mysql:3306/orders_serving?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC',
   'table-name' = 'ads_region_day',
+  'username' = 'ads_writer',
+  'password' = 'local-orders-ads',
+  'sink.buffer-flush.interval' = '1 s'
+);
+
+-- 结果级推进：业务日每次汇总后覆盖一行，供读侧核对「表内容」与「推进信号」是否一致。
+CREATE TABLE ads_region_day_progress (
+  biz_date DATE,
+  advanced_at TIMESTAMP(3),
+  region_count BIGINT,
+  paid_order_count BIGINT,
+  gmv_cents DECIMAL(38,0),
+  PRIMARY KEY (biz_date) NOT ENFORCED
+) WITH (
+  'connector' = 'jdbc',
+  'url' = 'jdbc:mysql://mysql:3306/orders_serving?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC',
+  'table-name' = 'ads_region_day_progress',
+  'username' = 'ads_writer',
+  'password' = 'local-orders-ads',
+  'sink.buffer-flush.interval' = '1 s'
+);
+
+-- 作业级推进：按业务日统计已消费的 CDC 事件，独立于成交状态。
+-- 全是取消单（ADS 无行）时该表仍有行，据此区分「无成交」与「尚未产出」。
+CREATE TABLE ads_region_day_events (
+  biz_date DATE,
+  advanced_at TIMESTAMP(3),
+  event_count BIGINT,
+  max_event_time TIMESTAMP(3),
+  PRIMARY KEY (biz_date) NOT ENFORCED
+) WITH (
+  'connector' = 'jdbc',
+  'url' = 'jdbc:mysql://mysql:3306/orders_serving?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC',
+  'table-name' = 'ads_region_day_events',
   'username' = 'ads_writer',
   'password' = 'local-orders-ads',
   'sink.buffer-flush.interval' = '1 s'
@@ -96,5 +131,17 @@ BEGIN
   INSERT INTO dws_region_minute
     SELECT biz_date, minute_start, region, COUNT(*), SUM(CAST(amount_cents AS DECIMAL(38,0)))
     FROM dwd_paid GROUP BY biz_date, minute_start, region;
-  INSERT INTO ads_region_day SELECT * FROM region_day;
+  -- observed_at 取作业写入时刻（会话时区 Asia/Shanghai），是契约中可复核的结果观测时间。
+  INSERT INTO ads_region_day
+    SELECT biz_date, region, paid_order_count, gmv_cents, LOCALTIMESTAMP FROM region_day;
+  INSERT INTO ads_region_day_progress
+    SELECT biz_date, LOCALTIMESTAMP, COUNT(*), SUM(paid_order_count), SUM(gmv_cents)
+    FROM region_day GROUP BY biz_date;
+  INSERT INTO ads_region_day_events
+    SELECT CAST(TO_TIMESTAMP_LTZ(paid_epoch_ms, 3) AS DATE) AS biz_date,
+           LOCALTIMESTAMP,
+           COUNT(*),
+           CAST(MAX(TO_TIMESTAMP_LTZ(paid_epoch_ms, 3)) AS TIMESTAMP(3))
+    FROM normalized_orders
+    GROUP BY CAST(TO_TIMESTAMP_LTZ(paid_epoch_ms, 3) AS DATE);
 END;

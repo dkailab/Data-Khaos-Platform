@@ -42,14 +42,36 @@ CREATE TABLE orders_serving.dws_region_minute (
   PRIMARY KEY (biz_date, minute_start, region)
 ) ENGINE=InnoDB;
 
+-- observed_at 是结果的观测时间：由实时作业在写入该行时以契约时区（Asia/Shanghai）落库，
+-- 不是查询时取 now()，因此可用 SELECT MAX(observed_at) 独立复核。
 CREATE TABLE orders_serving.ads_region_day (
   biz_date DATE NOT NULL,
   region VARCHAR(32) NOT NULL,
   paid_order_count BIGINT NOT NULL,
   gmv_cents DECIMAL(38,0) NOT NULL,
+  observed_at DATETIME(3) NOT NULL,
   PRIMARY KEY (biz_date, region)
+) ENGINE=InnoDB;
+
+-- 结果级推进：按业务日记录 ADS 最近一次推进时刻与规模，可与 ads_region_day 行数交叉校验。
+CREATE TABLE orders_serving.ads_region_day_progress (
+  biz_date DATE NOT NULL PRIMARY KEY,
+  advanced_at DATETIME(3) NOT NULL,
+  region_count BIGINT NOT NULL,
+  paid_order_count BIGINT NOT NULL,
+  gmv_cents DECIMAL(38,0) NOT NULL
+) ENGINE=InnoDB;
+
+-- 作业级推进：按业务日记录作业已消费的 CDC 事件，独立于「是否成交」。
+-- 用于在 ADS 无行时区分「该业务日确实无成交」与「作业尚未推进到该业务日」。
+CREATE TABLE orders_serving.ads_region_day_events (
+  biz_date DATE NOT NULL PRIMARY KEY,
+  advanced_at DATETIME(3) NOT NULL,
+  event_count BIGINT NOT NULL,
+  max_event_time DATETIME(3)
 ) ENGINE=InnoDB;
 
 -- Batch reconciliation uses a fixed snapshot and its own serving table.
 CREATE TABLE orders_serving.batch_order_snapshot LIKE orders_source.orders;
+-- 批 ADS 沿用实时表结构（含 observed_at），使两模式各自携带时效证据。
 CREATE TABLE orders_serving.ads_region_day_batch LIKE orders_serving.ads_region_day;

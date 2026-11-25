@@ -13,6 +13,8 @@ public class WarehouseApiCredential {
     @TableId(type = IdType.ASSIGN_UUID)
     private String id;
     private String apiVersionId;
+    /** 归属应用；为空表示 PRC 之前由签发人委派的存量凭据，按签发人身份执行。 */
+    private String appId;
     private String appName;
     private String tokenDigest;
     private String issuedBy;

@@ -12,6 +12,9 @@ import java.time.LocalDateTime;
 public class WarehouseApiVersion {
     public enum Status { DRAFT, PUBLISHED, OFFLINE }
 
+    /** BATCH=离线分区发布（走质量证据）；REALTIME=实时 ADS（走观测时间与时效判定）。 */
+    public enum DataMode { BATCH, REALTIME }
+
     @TableId(type = IdType.ASSIGN_UUID)
     private String id;
     private String projectId;
@@ -19,6 +22,13 @@ public class WarehouseApiVersion {
     private int apiVersion;
     private String apiName;
     private int maxRows;
+    private DataMode dataMode;
+    private String realtimeAssetId;
+    private String realtimeBatchAssetId;
+    private String observedTimezone;
+    private String amountUnit;
+    private int freshnessFreshSeconds;
+    private int freshnessStaleSeconds;
     private Status status;
     private int revision;
     private String createdBy;

@@ -14,6 +14,10 @@ import com.datakhaos.query.controller.WarehouseApiController;
 import com.datakhaos.query.dto.OrderRegionGmv;
 import com.datakhaos.query.mapper.WarehouseApiVersionMapper;
 import com.datakhaos.query.mapper.WarehouseApiCredentialMapper;
+import com.datakhaos.query.mapper.WarehouseApiAppMapper;
+import com.datakhaos.query.mapper.WarehouseApiCallAuditMapper;
+import com.datakhaos.query.mapper.WarehouseApiGrantMapper;
+import com.datakhaos.query.mapper.WarehouseApiQuotaWindowMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.ibatis.mapping.Environment;
@@ -33,6 +37,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -40,6 +45,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static com.datakhaos.common.constant.CommonConstants.HEADER_USER_ID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -52,6 +58,22 @@ class WarehouseApiLifecycleTest {
 
     private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
     private final AtomicInteger lastLimit = new AtomicInteger();
+    private final RealtimeAdsQueryService realtime = new RealtimeAdsQueryService(null, null) {
+        @Override
+        Table resolve(String assetId) {
+            return new Table("ds", "orders_serving", "ads_region_day");
+        }
+
+        @Override
+        List<RegionSample> readRegions(Table table, LocalDate date, int limit) {
+            return List.of(new RegionSample("east", "100.00", 2, "2026-11-17T00:05:12.345"));
+        }
+
+        @Override
+        EventProgress readEventProgress(Table table, LocalDate date) {
+            return new EventProgress("2026-11-17T00:05:13.000", 3, "2026-11-17T00:02:02.000");
+        }
+    };
     private Connection keepAlive;
     private MockMvc mvc;
     private boolean issuerActive = true;
@@ -63,7 +85,9 @@ class WarehouseApiLifecycleTest {
         database.setURL("jdbc:h2:mem:" + UUID.randomUUID() + ";MODE=MySQL");
         keepAlive = database.getConnection();
         try (var statement = keepAlive.createStatement()) {
-            for (String migration : List.of("migrate-warehouse-api-versions.sql", "migrate-warehouse-api-credentials.sql")) {
+            for (String migration : List.of("migrate-warehouse-api-versions.sql",
+                    "migrate-warehouse-api-credentials.sql", "migrate-warehouse-api-apps.sql",
+                    "migrate-warehouse-api-realtime.sql")) {
                 statement.execute(Files.readString(Path.of("..", "db", migration)).replace("USE data_khaos;", ""));
             }
         }
@@ -72,6 +96,10 @@ class WarehouseApiLifecycleTest {
         configuration.addInterceptor(new MybatisPlusConfig().mybatisPlusInterceptor(new StandardEnvironment()));
         configuration.addMapper(WarehouseApiVersionMapper.class);
         configuration.addMapper(WarehouseApiCredentialMapper.class);
+        configuration.addMapper(WarehouseApiAppMapper.class);
+        configuration.addMapper(WarehouseApiGrantMapper.class);
+        configuration.addMapper(WarehouseApiQuotaWindowMapper.class);
+        configuration.addMapper(WarehouseApiCallAuditMapper.class);
         var session = new SqlSessionTemplate(new MybatisSqlSessionFactoryBuilder().build(configuration));
         var mapper = session.getMapper(WarehouseApiVersionMapper.class);
         var permissions = new PermissionApiClient(null) {
@@ -95,9 +123,15 @@ class WarehouseApiLifecycleTest {
                 return new OrderRegionGmv(bizDate, "publication", "quality", "2026-11-18T01:00:00", false, List.of());
             }
         };
-        var apis = new WarehouseApiService(mapper, permissions, materializations);
+        var apis = new WarehouseApiService(mapper, permissions, materializations, realtime);
+        var appService = new WarehouseApiAppService(
+                session.getMapper(WarehouseApiAppMapper.class),
+                session.getMapper(WarehouseApiGrantMapper.class),
+                mapper, apis, permissions);
         var credentials = new WarehouseApiCredentialService(session.getMapper(WarehouseApiCredentialMapper.class),
-                mapper, apis, materializations);
+                mapper, apis, appService,
+                new WarehouseApiQuotaService(session.getMapper(WarehouseApiQuotaWindowMapper.class)),
+                new WarehouseApiAuditService(session.getMapper(WarehouseApiCallAuditMapper.class)));
         mvc = MockMvcBuilders.standaloneSetup(new WarehouseApiController(apis, credentials))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .addFilters(new MetadataContextFilter())
@@ -204,6 +238,52 @@ class WarehouseApiLifecycleTest {
         String thirdToken = "Bearer " + call(issue(management), "developer", ResultCode.SUCCESS).path("token").asText();
         call(post(v1 + "/offline").param("revision", "2"), "developer", ResultCode.SUCCESS);
         call(machineInvoke(1, thirdToken), null, ResultCode.NOT_FOUND);
+    }
+
+    /** 实时契约走同一条版本生命周期，但返回的是观测时间与时效，而不是发布证据。 */
+    @Test
+    void servesRealtimeContractWithObservationTimeAndFreshness() throws Exception {
+        String v1 = ADMIN + VERSION + "1";
+        var created = call(realtimeDraft(post(v1), 50, "mt_realtime_ads"), "developer", ResultCode.SUCCESS);
+        assertEquals("REALTIME", created.path("dataMode").asText());
+        assertEquals("Asia/Shanghai", created.path("observedTimezone").asText());
+        assertEquals("CNY", created.path("amountUnit").asText());
+        assertEquals(60, created.path("freshnessFreshSeconds").asInt());
+        assertEquals(300, created.path("freshnessStaleSeconds").asInt());
+
+        call(post(v1 + "/publish").param("revision", "1"), "developer", ResultCode.SUCCESS);
+        var payload = call(invoke(1), "viewer", ResultCode.SUCCESS);
+        assertEquals("REALTIME", payload.path("dataMode").asText());
+        assertEquals("PRODUCED", payload.path("state").asText());
+        // 观测时间为固定历史时刻，相对当前时间必然超过 STALE 阈值
+        assertEquals("STALE", payload.path("freshness").asText());
+        assertEquals("2026-11-17T00:05:12.345+08:00", payload.path("observedAt").asText());
+        assertEquals("east", payload.path("regions").get(0).path("region").asText());
+        assertEquals("100.00", payload.path("regions").get(0).path("gmv").asText());
+        assertEquals(3, payload.path("progress").path("eventCount").asLong());
+
+        var reconcile = call(get(ADMIN + VERSION + "1/reconcile").param("bizDate", DATE),
+                "developer", ResultCode.SUCCESS);
+        assertTrue(reconcile.path("matched").asBoolean());
+        assertEquals("MATCHED", reconcile.path("regions").get(0).path("verdict").asText());
+    }
+
+    @Test
+    void rejectsRealtimeDraftWithoutAssetAndKeepsBatchAsDefault() throws Exception {
+        String v1 = ADMIN + VERSION + "1";
+        call(realtimeDraft(post(v1), 10, null), "developer", ResultCode.VALIDATE_FAILED);
+        call(realtimeDraft(post(v1), 10, "bad asset!"), "developer", ResultCode.VALIDATE_FAILED);
+        var batch = call(draft(post(v1), 10), "developer", ResultCode.SUCCESS);
+        assertEquals("BATCH", batch.path("dataMode").asText());
+        assertTrue(batch.path("realtimeAssetId").isNull());
+    }
+
+    private static MockHttpServletRequestBuilder realtimeDraft(MockHttpServletRequestBuilder request,
+            int maxRows, String assetId) {
+        String asset = assetId == null ? "" : ",\"realtimeAssetId\":\"" + assetId + "\"";
+        return request.contentType(MediaType.APPLICATION_JSON).content(
+                "{\"name\":\"实时区域成交额\",\"maxRows\":" + maxRows + ",\"dataMode\":\"REALTIME\""
+                        + asset + ",\"realtimeBatchAssetId\":\"mt_batch_ads\"}");
     }
 
     private static MockHttpServletRequestBuilder issue(String management) {

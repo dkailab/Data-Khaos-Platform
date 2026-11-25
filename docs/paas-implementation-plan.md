@@ -182,10 +182,10 @@ flowchart LR
 
 | 顺序 | 交付 | 模块与并行关系 | 完成条件 |
 | --- | --- | --- | --- |
-| PR A · 真实调用验收 | 可重复执行的订单 ADS 和数据 API 联调脚本，记录样例结果与失败路径。 | `scripts` 与文档。优先开工。 | 在真实 MySQL、Redis 和现有服务上跑通发布、读数、凭据吊销、API 下线。 |
-| PR B · 数据服务工作台 | 项目内操作 API 版本、管理调用凭据、试跑已发布版本。 | `data-khaos-web`。可与 PR A 并行，复用当前 HTTP 契约。 | 项目开发成员从页面完成草稿 → 发布 → 签发 → 试跑 → 吊销；普通项目成员可用已有的版本化地址试跑其可访问的已发布 API。 |
-| PR C · 应用注册与运营 | 独立应用身份、按 API 版本授权与配额、可检索的调用记录。 | `permission`、`query`、`gateway`。以 PR A 的联调脚本作为回归基线。 | 两个应用拥有独立配额；轮换保持同一应用归属；回收授权即时阻断后续请求。 |
-| PR D · 第二种数仓契约 | 在订单例子上补实时 ADS 读 API 和对账验证。 | `examples/realtime-orders`、`query`。先确定稳定快照和时效语义，再接入发布管理。 | 实时返回时效和数据观察时间，可与日终 ADS 对账，迟到更正和重启恢复后可复验。 |
+| PR A · 真实调用验收 | **已交付** · `scripts/verify-warehouse-api.sh`（13 项检查 + 自动清理）与[交接文档](paas-pr-a-b-handover.md)。**待真实环境验收**。 | `scripts` 与文档。优先开工。 | 在真实 MySQL、Redis 和现有服务上跑通发布、读数、凭据吊销、API 下线。 |
+| PR B · 数据服务工作台 | **已交付** · 「数据服务 → 数仓 API」工作台（`/service/warehouse-api`），含草稿/发布/下线、试跑、凭据签发与吊销。 | `data-khaos-web`。可与 PR A 并行，复用当前 HTTP 契约。 | 项目开发成员从页面完成草稿 → 发布 → 签发 → 试跑 → 吊销；普通项目成员可用已有的版本化地址试跑其可访问的已发布 API。 |
+| PR C · 应用注册与运营 | **已交付** · 应用/授权/配额/审计四张表与 8 类接口，`scripts/verify-warehouse-apps.sh`（14 步 + 自动清理）与[交接文档](paas-pr-c-handover.md)。**待真实环境验收**。 | `query`（`permission`/`gateway` 见交接文档第 5.1 节的取舍说明）。以 PR A 的联调脚本作为回归基线。 | 两个应用拥有独立配额；轮换保持同一应用归属；回收授权即时阻断后续请求。 |
+| PR D · 第二种数仓契约 | **已交付** · 实时 ADS 契约（`data_mode` + 观测时间 + 三态时效）与对流批对账接口，`db/migrate-warehouse-api-realtime.sql`、`db/seed-realtime-ads.sql` 与[交接文档](paas-pr-d-handover.md)。**待真实环境验收**；CDC 与 TaskManager 恢复场景需 Flink 实验环境。 | `examples/realtime-orders`、`query`。先确定稳定快照和时效语义，再接入发布管理。 | 实时返回时效和数据观察时间，可与日终 ADS 对账，迟到更正和重启恢复后可复验。 |
 
 #### PR A · 真实调用验收
 

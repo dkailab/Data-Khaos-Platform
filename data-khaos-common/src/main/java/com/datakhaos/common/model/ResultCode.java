@@ -14,6 +14,7 @@ public enum ResultCode {
     UNAUTHORIZED(401, "暂未登录或登录已过期"),
     FORBIDDEN(403, "没有相关权限"),
     NOT_FOUND(404, "资源不存在"),
+    TOO_MANY_REQUESTS(429, "请求超出调用配额"),
     SYSTEM_ERROR(5000, "系统异常"),
     BUSINESS_ERROR(5001, "业务异常"),
     DUPLICATE_KEY(5002, "数据已存在"),

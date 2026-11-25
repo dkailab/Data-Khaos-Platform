@@ -161,6 +161,38 @@ class Lab:
             wait_for(f"{label} {stage} reconciles", matches)
         print(f"PASS {label}: DWD, DWS and ADS reconcile with source", flush=True)
 
+    def assert_freshness(self, label):
+        """观测时间与推进信号必须由作业落库，且推进信号要和表内容一致。"""
+        missing = self.result(
+            "SELECT COUNT(*) FROM orders_serving.ads_region_day WHERE observed_at IS NULL;")
+        if missing != ["0"]:
+            raise RuntimeError(f"{label}: ads_region_day has NULL observed_at ({missing})")
+        # 观测时间应落在上海时区当前时刻附近（±1 天），既能发现未写入，也不绑死时区解释。
+        drift = self.result("""
+            SELECT COUNT(*) FROM orders_serving.ads_region_day
+            WHERE ABS(TIMESTAMPDIFF(SECOND, observed_at,
+                    CONVERT_TZ(NOW(), '+00:00', '+08:00'))) > 86400;
+        """)
+        if drift != ["0"]:
+            raise RuntimeError(f"{label}: observed_at is not near current time ({drift})")
+        mismatch = self.result("""
+            SELECT p.biz_date, p.region_count, COUNT(a.region)
+            FROM orders_serving.ads_region_day_progress p
+            LEFT JOIN orders_serving.ads_region_day a ON a.biz_date = p.biz_date
+            GROUP BY p.biz_date, p.region_count
+            HAVING p.region_count <> COUNT(a.region);
+        """)
+        if mismatch:
+            raise RuntimeError(f"{label}: progress disagrees with ADS rows: {mismatch}")
+        stalled = self.result(
+            "SELECT COUNT(*) FROM orders_serving.ads_region_day_events WHERE event_count <= 0;")
+        if stalled != ["0"]:
+            raise RuntimeError(f"{label}: event progress never advanced ({stalled})")
+        empty = self.result("SELECT COUNT(*) FROM orders_serving.ads_region_day_events;")
+        if empty == ["0"]:
+            raise RuntimeError(f"{label}: no event progress rows, job advance signal missing")
+        print(f"PASS {label}: observed_at and progress signals verified", flush=True)
+
     def records(self, count):
         output = self.kafka("console-consumer", "--topic", TOPIC, "--partition", "0", "--offset", "earliest",
                             "--max-messages", str(count), "--timeout-ms", "12000", "--property", "print.key=true",
@@ -196,6 +228,7 @@ class Lab:
             self.compose("start", "taskmanager")
         restored = [wait_for("restored checkpoint", lambda: self.checkpoint(job, "restored")) for job in jobs]
         self.assert_current("changes committed while TaskManager was stopped")
+        self.assert_freshness("after checkpoint restore")
         print("PASS checkpoint restore for both jobs:", [item["id"] for item in restored], flush=True)
 
 
@@ -214,6 +247,7 @@ def main():
         jobs = lab.submit()
         print(f"Flink REST {lab.rest_url}   jobs {' '.join(jobs)}", flush=True)
         lab.assert_current("initial snapshot")
+        lab.assert_freshness("initial snapshot")
         initial = lab.records(3)
         if sorted(event["after"]["order_id"] for _, event in initial) != [101, 102, 103]:
             raise RuntimeError(f"Missing initial ODS rows: {initial}")
@@ -225,6 +259,7 @@ def main():
             DELETE FROM orders_source.orders WHERE order_id=103;
         """)
         lab.assert_current("insert, region move, payment cancellation, delete and late minute")
+        lab.assert_freshness("incremental changes")
         incremental = lab.records(7)[3:]
         ops = [(event["op"], (event["after"] or event["before"])["order_id"]) for _, event in incremental]
         if ops != [("c", 104), ("u", 101), ("u", 102), ("d", 103)]:

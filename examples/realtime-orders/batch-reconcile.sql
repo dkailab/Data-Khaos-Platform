@@ -30,6 +30,7 @@ CREATE TABLE ads_region_day_batch (
   region STRING,
   paid_order_count BIGINT,
   gmv_cents DECIMAL(38,0),
+  observed_at TIMESTAMP(3),
   PRIMARY KEY (biz_date, region) NOT ENFORCED
 ) WITH (
   'connector' = 'jdbc',
@@ -39,4 +40,6 @@ CREATE TABLE ads_region_day_batch (
   'password' = 'local-orders-ads'
 );
 
-INSERT INTO ads_region_day_batch SELECT * FROM region_day;
+-- 批 ADS 同样落自身观测时间，便于与实时结果分别展示时效证据。
+INSERT INTO ads_region_day_batch
+SELECT biz_date, region, paid_order_count, gmv_cents, LOCALTIMESTAMP FROM region_day;

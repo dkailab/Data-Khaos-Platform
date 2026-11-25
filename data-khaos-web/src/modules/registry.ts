@@ -107,6 +107,7 @@ export const CATEGORIES: CategoryDef[] = [
       { key: 'svc_report', title: '报表服务', path: '/visual/dashboard' },
       { key: 'svc_adhoc', title: '自助取数', path: '/visual/adhoc' },
       { key: 'svc_market', title: '模型市场', path: '/mart/market' },
+      { key: 'svc_warehouse', title: '数仓 API', path: '/service/warehouse-api', icon: 'Link' },
       { key: 'svc_api', title: '数据接口服务' },
       { key: 'svc_publish', title: 'API 发布管理' },
       { key: 'svc_share', title: '数据共享服务' },

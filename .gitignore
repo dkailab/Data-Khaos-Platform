@@ -25,3 +25,10 @@ dist/
 .env.*
 *.pem
 *.key
+
+# Python
+__pycache__/
+*.pyc
+
+# 本地工具状态（agent 记忆、面板等，不入库）
+.workbuddy/

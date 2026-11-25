@@ -232,6 +232,13 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/visual/dashboard/DashboardEditor.vue'),
         meta: { title: '编辑仪表板' },
       },
+      // 数据服务 - 数仓 API 发布与凭据
+      {
+        path: 'service/warehouse-api',
+        name: 'ServiceWarehouseApi',
+        component: () => import('@/views/service/WarehouseApiWorkbench.vue'),
+        meta: { title: '数仓 API' },
+      },
       {
         path: 'visual/dashboard/view/:id',
         name: 'VisualDashboardView',
