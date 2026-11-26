@@ -3,25 +3,29 @@
     <OneSqlMaterialization v-if="materializationAsset" :asset-id="materializationAsset"
       :biz-date="materializationDate" class="materialized-result" />
     <!-- 左侧 Schema 面板 -->
-    <div class="schema-panel" :class="{ collapsed: schemaCollapsed }">
+    <aside aria-label="查询资源" class="schema-panel" :class="{ collapsed: schemaCollapsed }">
       <div class="schema-header">
-        <span>数据库结构</span>
-        <el-button size="small" text @click="schemaCollapsed = !schemaCollapsed">
+        <span v-if="!schemaCollapsed">查询资源</span>
+        <el-button size="small" text :aria-label="schemaCollapsed ? '展开查询资源' : '收起查询资源'" @click="schemaCollapsed = !schemaCollapsed">
           <el-icon><Fold /></el-icon>
         </el-button>
       </div>
-      <div v-if="!schemaCollapsed" class="schema-body">
-        <el-input v-model="schemaFilter" size="small" placeholder="搜索表/字段" :icon="Search" class="schema-search" />
+      <nav v-if="!schemaCollapsed" class="resource-switch" aria-label="资源类型">
+        <button type="button" :aria-pressed="resourceTab === 'schema'" @click="resourceTab = 'schema'">数据库对象</button>
+        <button type="button" :aria-pressed="resourceTab === 'history'" @click="resourceTab = 'history'">查询历史</button>
+      </nav>
+      <div v-if="!schemaCollapsed && resourceTab === 'schema'" class="schema-body">
+        <el-input v-model="schemaFilter" size="small" placeholder="搜索表或已展开字段" aria-label="搜索数据库对象" :prefix-icon="Search" class="schema-search" />
         <div class="schema-tree">
           <div v-for="table in filteredTables" :key="table" class="schema-table">
-            <div class="table-name" @click="toggleTable(table)" :class="{ expanded: expandedTables.includes(table) }">
+            <button type="button" class="table-name" @click="toggleTable(table)" :aria-expanded="expandedTables.includes(table)" :class="{ expanded: expandedTables.includes(table) }">
               <el-icon><ArrowRight /></el-icon>
               <el-icon class="table-icon"><Grid /></el-icon>
               <span :title="table">{{ table }}</span>
               <span v-if="columnLoading[table]" class="col-loading"><el-icon class="is-loading"><Refresh /></el-icon></span>
-            </div>
+            </button>
             <div v-if="expandedTables.includes(table)" class="table-columns">
-              <div v-for="col in columnMap[table] || []" :key="col.name" class="column-item" @click="insertText(col.name)">
+              <button v-for="col in columnMap[table] || []" :key="col.name" type="button" class="column-item" @click="insertText(col.name)">
                 <span class="col-name">
                   {{ col.name }}
                   <span v-if="col.bizName" class="col-biz">{{ col.bizName }}</span>
@@ -37,68 +41,77 @@
                   <el-tag v-if="col.dictTypeName" size="small" effect="plain" class="col-tag dict">字典</el-tag>
                   <span class="col-type">{{ col.type }}</span>
                 </span>
-              </div>
+              </button>
               <div v-if="!columnLoading[table] && columnMap[table] && columnMap[table].length === 0" class="column-empty">暂无字段</div>
             </div>
           </div>
-          <el-empty v-if="filteredTables.length === 0" description="请选择数据源" :image-size="60" />
+          <div v-if="schemaLoading" class="resource-state" role="status">正在加载数据库对象…</div>
+          <div v-else-if="schemaError" class="resource-state">{{ schemaError }} <DkButton variant="quiet" @click="loadSchema">重试</DkButton></div>
+          <el-empty v-else-if="!filteredTables.length" :description="!datasourceId ? '请选择数据源' : '暂无匹配的数据库对象'" :image-size="58" />
         </div>
       </div>
-    </div>
+      <section v-else-if="!schemaCollapsed" class="history-panel" aria-label="查询历史">
+        <div class="history-header">
+          <el-button size="small" text :icon="Refresh" :loading="historyLoading" @click="loadHistory">刷新历史</el-button>
+        </div>
+        <div class="history-list">
+          <button v-for="row in historyList" :key="row.id" type="button" class="history-item" @click="useHistory(row)">
+            <div class="history-sql" :title="row.sqlText">{{ row.sqlText }}</div>
+            <div class="history-meta">
+              <span>{{ row.status === 1 ? '成功' : '失败' }}</span>
+              <span v-if="row.costMs != null">{{ row.costMs }} ms</span>
+              <span v-if="row.createTime">{{ row.createTime.replace('T', ' ').slice(0, 19) }}</span>
+            </div>
+          </button>
+          <el-empty v-if="!historyLoading && !historyList.length" :description="historyError || '暂无查询历史'" :image-size="58" />
+        </div>
+      </section>
+    </aside>
 
     <!-- 中间主区域 -->
     <div class="main-panel">
-      <!-- 顶部工具栏 -->
+      <header class="workspace-heading"><h1>OneSQL 取数</h1>
+        <el-button text circle :icon="dark ? Sunny : Moon" :aria-label="dark ? '切换浅色' : '切换深色'" @click="toggleTheme" />
+      </header>
       <div class="toolbar">
-        <div class="toolbar-left">
-          <el-select v-model="datasourceId" placeholder="选择数据源" filterable style="width: 240px" @change="onDatasourceChange">
-            <el-option v-for="ds in datasources" :key="ds.id" :label="ds.dsName" :value="ds.id!" />
-          </el-select>
-          <el-input v-model="databaseName" placeholder="数据库（可选）" style="width: 160px; margin-left: 8px" />
-          <el-button type="primary" :loading="executing" :icon="CaretRight" @click="runQuery" style="margin-left: 8px">
-            执行
-          </el-button>
-          <el-button text :icon="Star" @click="formatSql">格式化</el-button>
-          <el-button text :icon="Cpu" :disabled="!sqlText.trim()" @click="runExplain" :loading="explaining">执行计划</el-button>
-          <el-button text :icon="Download" :disabled="!result || !result.columns?.length" @click="exportCsv">导出</el-button>
-        </div>
-        <div class="toolbar-right">
-          <el-tooltip :content="dark ? '切换浅色' : '切换深色'" placement="bottom">
-            <el-button text circle :icon="dark ? Sunny : Moon" @click="toggleTheme" />
-          </el-tooltip>
-          <el-tag v-if="executionInfo" size="small" :type="executionInfo.type">
-            {{ executionInfo.text }}
-          </el-tag>
-          <span v-if="!executing && result" class="result-meta">
-            共 {{ result.rows?.length || 0 }} 行，耗时 {{ result.costMs }} ms
-          </span>
-        </div>
+        <el-select v-model="datasourceId" aria-label="查询数据源" placeholder="选择数据源" filterable class="source-select"
+          @change="selectDatasource">
+          <el-option v-for="ds in datasources" :key="ds.id" :label="ds.dsName" :value="ds.id!" />
+        </el-select>
+        <el-input v-model="databaseName" aria-label="查询数据库" placeholder="数据库（可选）" class="database-input" @change="loadSchema" />
+        <DkButton variant="primary" :loading="executing" :disabled="explaining" @click="runQuery(false)">
+          <template #icon><CaretRight aria-hidden="true" /></template>运行
+        </DkButton>
+        <DkButton :disabled="executing || explaining || !selectedSql" @click="runQuery(true)">运行选中</DkButton>
+        <DkButton variant="quiet" :disabled="!sqlText.trim()" @click="formatSql">格式化</DkButton>
+        <DkButton variant="quiet" :disabled="executing || !sqlText.trim()" :loading="explaining" @click="runExplain">执行计划</DkButton>
       </div>
+      <el-alert v-if="datasourceError" :title="datasourceError" type="warning" show-icon :closable="false">
+        <DkButton variant="quiet" @click="loadDatasources">重试</DkButton>
+      </el-alert>
 
-      <!-- 编辑器区域 -->
-      <div class="editor-container">
+      <div class="editor-container" :style="resultOpen ? { '--editor-height': editorHeight + 'px' } : undefined">
         <div ref="editorRef" class="codemirror-host"></div>
-        <!-- 快捷键提示 -->
         <div class="editor-shortcuts">
-          <span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> 执行</span>
+          <span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> 运行</span>
           <span><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> 格式化</span>
         </div>
       </div>
+      <div v-if="resultOpen" class="result-divider" role="separator" aria-label="调整编辑区高度"
+        aria-orientation="horizontal" tabindex="0" :aria-valuemin="120" :aria-valuemax="580"
+        :aria-valuenow="editorHeight" @pointerdown="startResize" @pointermove="resize" @pointerup="endResize"
+        @pointercancel="endResize" @keydown="resizeByKey"><span></span></div>
 
-      <!-- 结果显示区域 -->
-      <div class="result-area">
-        <el-tabs v-model="resultTab">
+      <section class="result-area" :class="{ 'result-closed': !resultOpen }">
+        <div class="result-bar">
+          <strong>运行与结果</strong>
+          <DkButton variant="quiet" :aria-expanded="resultOpen" aria-controls="onesql-results" @click="resultOpen = !resultOpen">
+            {{ resultOpen ? '收起结果' : '展开结果' }}
+          </DkButton>
+        </div>
+        <el-tabs v-show="resultOpen" id="onesql-results" v-model="resultTab">
           <el-tab-pane label="查询结果" name="result">
-            <el-table :data="result?.rows || []" size="small" border max-height="360" v-loading="executing" stripe>
-              <el-table-column type="index" label="#" width="50" />
-              <el-table-column v-for="col in result?.columns || []" :key="col.columnName" :prop="col.columnName" :label="col.columnName" min-width="120" show-overflow-tooltip>
-                <template #header>
-                  <span :title="col.columnType">{{ col.columnName }}</span>
-                  <span class="col-type-badge">{{ col.columnType }}</span>
-                </template>
-              </el-table-column>
-            </el-table>
-            <el-empty v-if="!executing && result && result.columns?.length === 0" description="查询无结果" />
+            <OneSqlQueryResult :result="result" :running="executing" :statement="lastRun" :error="queryError" />
           </el-tab-pane>
           <el-tab-pane label="SQL 诊断" name="diagnose">
             <div class="diagnose-panel">
@@ -160,37 +173,21 @@
             </div>
           </el-tab-pane>
         </el-tabs>
-      </div>
-    </div>
-
-    <!-- 右侧历史面板 -->
-    <div class="history-panel">
-      <div class="history-header">
-        <span>查询历史</span>
-        <el-button size="small" text @click="loadHistory"><el-icon><Refresh /></el-icon></el-button>
-      </div>
-      <div class="history-list">
-        <div v-for="row in historyList" :key="row.id" class="history-item" @click="useHistory(row)">
-          <div class="history-sql">{{ row.sqlText }}</div>
-          <div class="history-meta">
-            <el-tag :type="row.status === 1 ? 'success' : 'danger'" size="small">{{ row.status === 1 ? '成功' : '失败' }}</el-tag>
-            <span>{{ row.costMs }}ms</span>
-          </div>
-        </div>
-        <el-empty v-if="historyList.length === 0" description="暂无历史" :image-size="60" />
-      </div>
+      </section>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CaretRight, Download, Fold, ArrowRight, Grid, Search, Star, Refresh, Cpu, Moon, Sunny } from '@element-plus/icons-vue'
+import { CaretRight, Fold, ArrowRight, Grid, Search, Refresh, Moon, Sunny } from '@element-plus/icons-vue'
 import { pageDatasources } from '@/api/datasource'
 import { executeQuery } from '@/api/query'
 import { useRoute } from 'vue-router'
 import OneSqlMaterialization from './OneSqlMaterialization.vue'
+import OneSqlQueryResult from './OneSqlQueryResult.vue'
+import DkButton from '@/paas-ui/DkButton.vue'
 import {
   sqlComplete, sqlFormat, sqlParse, getSchemaHints, queryHistory,
   sqlDiagnose, sqlExplain, getTableColumns,
@@ -201,7 +198,7 @@ import type { CompletionItem, QueryHistory, SqlDiagnoseResult, SqlParseResult } 
 
 // CodeMirror imports
 import { EditorState, StateEffect, Extension } from '@codemirror/state'
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection } from '@codemirror/view'
+import { EditorView, keymap, lineNumbers, placeholder, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection } from '@codemirror/view'
 import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands'
 import { sql, MySQL } from '@codemirror/lang-sql'
 import { autocompletion, CompletionContext, CompletionResult, Completion } from '@codemirror/autocomplete'
@@ -224,18 +221,54 @@ let editorView: EditorView | null = null
 const datasources = ref<MetaDatasource[]>([])
 const datasourceId = ref('')
 const databaseName = ref('')
-const sqlText = ref('SELECT * FROM demo_fact_order LIMIT 100')
+const sqlText = ref('')
+const selectedSql = ref('')
+const datasourceError = ref('')
 const executing = ref(false)
 const result = ref<QueryResult | null>(null)
 const parseResult = ref<SqlParseResult | null>(null)
 const resultTab = ref('result')
-const executionInfo = ref<{ text: string; type: string } | null>(null)
+const queryError = ref('')
+const lastRun = ref<{ sql: string; source: string; startedAt: string; selection: boolean } | null>(null)
+const resultOpen = ref(true)
+const editorHeight = ref(285)
+let drag: { id: number; y: number; height: number } | undefined
+
+function startResize(event: PointerEvent) {
+  if (event.button !== 0 || drag) return
+  const divider = event.currentTarget as HTMLElement
+  const editor = divider.previousElementSibling
+  drag = { id: event.pointerId, y: event.clientY, height: editor?.getBoundingClientRect().height ?? editorHeight.value }
+  divider.setPointerCapture(event.pointerId)
+}
+
+function setEditorHeight(height: number) {
+  editorHeight.value = Math.max(120, Math.min(580, Math.round(height)))
+}
+
+function resize(event: PointerEvent) {
+  if (drag?.id === event.pointerId) setEditorHeight(drag.height + event.clientY - drag.y)
+}
+
+function endResize(event: PointerEvent) {
+  if (drag?.id === event.pointerId) drag = undefined
+}
+
+function resizeByKey(event: KeyboardEvent) {
+  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+  event.preventDefault()
+  setEditorHeight(editorHeight.value + (event.key === 'ArrowUp' ? -24 : 24))
+}
 
 // 明暗主题：整页跟随切换，编辑器与页面保持一致（深色用 oneDark，浅色用默认亮色）
 const dark = ref(false)
 
 // Schema 懒加载
-const schemaCollapsed = ref(false)
+const schemaCollapsed = ref(window.matchMedia('(max-width: 760px)').matches)
+const resourceTab = ref<'schema' | 'history'>('schema')
+const schemaLoading = ref(false)
+const schemaError = ref('')
+let schemaRequest = 0
 const schemaFilter = ref('')
 const tables = ref<string[]>([])
 const expandedTables = ref<string[]>([])
@@ -254,6 +287,9 @@ const explainWarnings = ref<string[]>([])
 
 // History
 const historyList = ref<QueryHistory[]>([])
+const historyLoading = ref(false)
+const historyError = ref('')
+let historyRequest = 0
 
 // 自定义 SQL 补全
 let completionCache: Completion[] = []
@@ -334,6 +370,8 @@ function baseEditorTheme(): Extension {
 function editorExtensions(): Extension {
   return [
     lineNumbers(),
+    placeholder('输入 SQL，例如 SELECT 1'),
+    EditorView.contentAttributes.of({ 'aria-label': 'SQL 编辑器', spellcheck: 'false' }),
     highlightActiveLineGutter(),
     highlightActiveLine(),
     drawSelection(),
@@ -351,13 +389,17 @@ function editorExtensions(): Extension {
       ...defaultKeymap,
       ...historyKeymap,
       indentWithTab,
-      { key: 'Ctrl-Enter', run: () => { runQuery(); return true } },
+      { key: 'Ctrl-Enter', run: () => { void runQuery(false); return true } },
       { key: 'Ctrl-Shift-f', run: () => { formatSql(); return true } },
     ]),
     baseEditorTheme(),
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
         sqlText.value = update.state.doc.toString()
+      }
+      if (update.docChanged || update.selectionSet) {
+        const selection = update.state.selection.main
+        selectedSql.value = update.state.sliceDoc(selection.from, selection.to).trim()
       }
     }),
   ]
@@ -391,31 +433,33 @@ function initEditor() {
 }
 
 // 执行查询
-async function runQuery() {
-  if (!datasourceId.value) { ElMessage.warning('请选择数据源'); return }
-  if (!sqlText.value.trim()) { ElMessage.warning('请输入 SQL'); return }
+async function runQuery(selection: boolean) {
+  if (executing.value || explaining.value) return
+  const sourceId = datasourceId.value
+  const database = databaseName.value.trim()
+  const sql = (selection ? selectedSql.value : sqlText.value).trim()
+  if (!sourceId) { ElMessage.warning('请选择数据源'); return }
+  if (!sql) { ElMessage.warning(selection ? '请先选中 SQL' : '请输入 SQL'); return }
 
+  const source = datasources.value.find(row => row.id === sourceId)?.dsName || sourceId
+  lastRun.value = {
+    sql, source: database ? source + ' / ' + database : source,
+    startedAt: new Date().toLocaleTimeString('zh-CN', { hour12: false }), selection,
+  }
   executing.value = true
-  executionInfo.value = null
+  queryError.value = ''
   result.value = null
-
+  resultTab.value = 'result'
+  resultOpen.value = true
   try {
-    const res = await executeQuery({
-      datasourceId: datasourceId.value,
-      databaseName: databaseName.value || undefined,
-      sql: sqlText.value,
-    })
-    result.value = res
-    executionInfo.value = { text: '执行成功', type: 'success' }
-    resultTab.value = 'result'
-    runParse()
-    runDiagnose()
-    loadHistory()
-  } catch (e: any) {
-    executionInfo.value = { text: '执行失败', type: 'danger' }
-    ElMessage.error(e.message || '查询失败')
+    result.value = await executeQuery({ datasourceId: sourceId, databaseName: database || undefined, sql })
+    void runParse()
+    void runDiagnose()
+  } catch (e) {
+    queryError.value = e instanceof Error && e.message ? e.message : '查询失败'
   } finally {
     executing.value = false
+    void loadHistory()
   }
 }
 
@@ -423,7 +467,9 @@ async function runQuery() {
 async function formatSql() {
   if (!sqlText.value.trim()) return
   try {
-    const formatted = await sqlFormat(sqlText.value)
+    const source = sqlText.value
+    const formatted = await sqlFormat(source)
+    if (sqlText.value !== source) return
     if (editorView) {
       editorView.dispatch({
         changes: { from: 0, to: editorView.state.doc.length, insert: formatted },
@@ -467,6 +513,7 @@ async function runDiagnose() {
 
 // 执行计划 EXPLAIN
 async function runExplain() {
+  if (executing.value || explaining.value) return
   if (!datasourceId.value) { ElMessage.warning('请选择数据源'); return }
   if (!sqlText.value.trim()) { ElMessage.warning('请输入 SQL'); return }
   explaining.value = true
@@ -491,6 +538,7 @@ async function runExplain() {
     }
     explainWarnings.value = warn
     if (explainResult.value!.columns?.length) {
+      resultOpen.value = true
       resultTab.value = 'explain'
     }
   } catch (e: any) {
@@ -508,38 +556,27 @@ function typeBadge(t: any): string {
   return 'info'
 }
 
-// 导出 CSV
-function exportCsv() {
-  if (!result.value?.columns?.length) return
-  const cols = result.value.columns.map((c: any) => c.columnName || c.column_name)
-  let csv = '\uFEFF' + cols.join(',') + '\n'
-  for (const row of result.value.rows || []) {
-    csv += cols.map((c: string) => {
-      const v = String(row[c] ?? '')
-      return v.includes(',') || v.includes('"') ? `"${v.replace(/"/g, '""')}"` : v
-    }).join(',') + '\n'
-  }
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `onesql_result_${Date.now()}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+function selectDatasource(id: string) {
+  databaseName.value = datasources.value.find(row => row.id === id)?.databaseName || ''
+  void loadSchema()
 }
 
-// 数据源变更
-async function onDatasourceChange() {
+async function loadSchema() {
+  const request = ++schemaRequest
   tables.value = []
   expandedTables.value = []
   columnMap.value = {}
   columnLoading.value = {}
+  schemaError.value = ''
+  schemaLoading.value = !!datasourceId.value
   if (!datasourceId.value) return
   try {
-    const hints = await getSchemaHints(datasourceId.value, databaseName.value || undefined)
-    tables.value = hints.tables || []
+    const hints = await getSchemaHints(datasourceId.value, databaseName.value.trim() || undefined)
+    if (request === schemaRequest) tables.value = hints.tables || []
   } catch {
-    tables.value = []
+    if (request === schemaRequest) schemaError.value = '无法读取数据库对象'
+  } finally {
+    if (request === schemaRequest) schemaLoading.value = false
   }
 }
 
@@ -552,15 +589,16 @@ async function toggleTable(table: string) {
   }
   expandedTables.value.push(table)
   // 已加载则直接展开
-  if (columnMap.value[table]) return
-  if (!datasourceId.value) return
+  if (columnMap.value[table] || columnLoading.value[table] || !datasourceId.value) return
 
+  const request = schemaRequest
   columnLoading.value = { ...columnLoading.value, [table]: true }
   try {
     const [rows, annos] = await Promise.all([
       getTableColumns(datasourceId.value, table, databaseName.value || undefined),
       getTableColumnAnnotations(datasourceId.value, table, databaseName.value || undefined),
     ])
+    if (request !== schemaRequest) return
     const annoByCol: Record<string, any> = {}
     for (const a of annos || []) {
       if (a.columnName) annoByCol[a.columnName] = a
@@ -577,11 +615,13 @@ async function toggleTable(table: string) {
     })
     columnMap.value = { ...columnMap.value, [table]: cols }
   } catch {
-    columnMap.value = { ...columnMap.value, [table]: [] }
+    if (request === schemaRequest) expandedTables.value = expandedTables.value.filter(item => item !== table)
   } finally {
-    const next = { ...columnLoading.value }
-    delete next[table]
-    columnLoading.value = next
+    if (request === schemaRequest) {
+      const next = { ...columnLoading.value }
+      delete next[table]
+      columnLoading.value = next
+    }
   }
 }
 
@@ -597,11 +637,16 @@ function insertText(text: string) {
 
 // 加载历史
 async function loadHistory() {
+  const request = ++historyRequest
+  historyLoading.value = true
+  historyError.value = ''
   try {
     const data = await queryHistory({ current: 1, size: 20 })
-    historyList.value = data.records || []
+    if (request === historyRequest) historyList.value = data.records || []
   } catch {
-    // ignore
+    if (request === historyRequest) historyError.value = '无法加载查询历史'
+  } finally {
+    if (request === historyRequest) historyLoading.value = false
   }
 }
 
@@ -613,30 +658,41 @@ function useHistory(row: QueryHistory) {
     })
   }
   sqlText.value = row.sqlText || ''
-  datasourceId.value = row.datasourceId || ''
+  datasourceId.value = datasources.value.some(source => source.id === row.datasourceId) ? row.datasourceId || '' : ''
   databaseName.value = row.databaseName || ''
+  void loadSchema()
+  editorView?.focus()
 }
 
 const route = useRoute()
 const materializationAsset = computed(() => typeof route.query.materialization === 'string' ? route.query.materialization : '')
 const materializationDate = computed(() => typeof route.query.bizDate === 'string' ? route.query.bizDate : '')
 
-// 生命周期
-onMounted(async () => {
-  // 加载数据源
-  const data = await pageDatasources({ current: 1, size: 100 })
-  datasources.value = data.records || []
-  if (datasources.value.length > 0) {
-    datasourceId.value = datasources.value[0].id!
-    onDatasourceChange()
+async function loadDatasources() {
+  datasourceError.value = ''
+  try {
+    const data = await pageDatasources({ current: 1, size: 100 })
+    datasources.value = data.records || []
+    if (!datasourceId.value && datasources.value[0]?.id) {
+      datasourceId.value = datasources.value[0].id
+      selectDatasource(datasourceId.value)
+    }
+  } catch {
+    datasourceError.value = '无法加载数据源'
   }
-  loadHistory()
-  await nextTick()
+}
+
+onMounted(() => {
   initEditor()
+  void loadDatasources()
+  void loadHistory()
 })
 
 onBeforeUnmount(() => {
+  schemaRequest++
+  historyRequest++
   editorView?.destroy()
+  editorView = null
 })
 </script>
 
@@ -645,19 +701,19 @@ onBeforeUnmount(() => {
 .materialized-result { flex: 1 0 100%; min-width: 0; }
 /* ============ 明暗主题变量（整页跟随切换） ============ */
 .onesql-layout {
-  --onesql-bg: #fff;
-  --onesql-border: #e4e7ed;
-  --onesql-divider: #f0f2f5;
-  --onesql-hover: #f5f7fa;
-  --onesql-col-hover: #ecf5ff;
-  --onesql-fg: #303133;
-  --onesql-header-fg: #303133;
-  --onesql-muted: #909399;
+  --onesql-bg: var(--dk-surface);
+  --onesql-border: var(--dk-border);
+  --onesql-divider: var(--dk-soft);
+  --onesql-hover: var(--dk-sidebar);
+  --onesql-col-hover: var(--dk-primary-soft);
+  --onesql-fg: var(--dk-ink);
+  --onesql-header-fg: var(--dk-ink);
+  --onesql-muted: var(--dk-muted);
   --onesql-empty: #c0c4cc;
   --onesql-tag-bg: #f0f2f5;
-  --onesql-gutter: #fafafa;
+  --onesql-gutter: var(--dk-sidebar);
   --onesql-gutter-fg: #909399;
-  --onesql-editor-bg: #ffffff;
+  --onesql-editor-bg: var(--dk-surface);
   --onesql-biz: var(--dk-primary);
 }
 .onesql-layout.theme-dark {
@@ -679,14 +735,15 @@ onBeforeUnmount(() => {
 
 .onesql-layout {
   display: flex;
-  height: calc(100dvh - 57px);
+  height: max(590px, calc(100dvh - 57px));
+  min-width: 0;
   background: var(--onesql-bg);
   color: var(--onesql-fg);
 }
 
 /* ============ Schema 面板 ============ */
 .schema-panel {
-  width: 260px;
+  width: 240px;
   border-right: 1px solid var(--onesql-border);
   display: flex;
   flex-direction: column;
@@ -711,9 +768,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
 }
-.schema-search {
-  margin: 8px;
-}
+.schema-search { margin: 8px; width: auto; }
 .schema-tree {
   flex: 1;
   overflow-y: auto;
@@ -806,33 +861,43 @@ onBeforeUnmount(() => {
 /* ============ 主面板 ============ */
 .main-panel {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
+.onesql-layout:has(.materialized-result) .main-panel,
+.onesql-layout:has(.materialized-result) .schema-panel { min-height: max(590px, calc(100dvh - 57px)); }
 
-.toolbar {
+.workspace-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: 10px 14px 6px;
+}
+.workspace-heading h1 { margin: 0; color: var(--onesql-header-fg); font-size: 19px; }
+.toolbar {
+  display: flex;
+  align-items: center;
+  padding: 5px 14px 10px;
   border-bottom: 1px solid var(--onesql-border);
   gap: 8px;
   flex-wrap: wrap;
 }
-.toolbar-left, .toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.source-select { width: min(200px, 100%); }
+.database-input { width: min(155px, 100%); }
+.resource-switch { display: flex; border-bottom: 1px solid var(--onesql-border); padding: 0 4px; }
+.resource-switch button { flex: 1; padding: 8px 3px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--onesql-muted); cursor: pointer; font: inherit; }
+.resource-switch button[aria-pressed='true'] { color: var(--onesql-biz); border-bottom-color: var(--onesql-biz); font-weight: 600; }
+.resource-state { padding: 10px; color: var(--onesql-muted); font-size: 12px; }
+.table-name, .column-item {
+  width: 100%; background: transparent; border: 0; text-align: start; font-family: inherit;
 }
-.result-meta {
-  color: var(--onesql-muted);
-  font-size: 12px;
-}
-
 /* ============ 编辑器 ============ */
 .editor-container {
-  height: 280px;
+  flex: 0 1 var(--editor-height, 100%);
+  min-height: 120px;
   border-bottom: 1px solid var(--onesql-border);
   position: relative;
   display: flex;
@@ -840,6 +905,7 @@ onBeforeUnmount(() => {
 }
 .codemirror-host {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 .editor-shortcuts {
@@ -862,27 +928,26 @@ kbd {
 }
 
 /* ============ 结果区域 ============ */
-.result-area {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+.result-divider {
+  touch-action: none;
+  cursor: row-resize;
+  height: 9px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--onesql-gutter);
+  border-bottom: 1px solid var(--onesql-border);
 }
-:deep(.el-tabs__content) {
-  flex: 1;
-  overflow: auto;
-  padding: 8px;
-}
-.col-type-badge {
-  display: inline-block;
-  margin-left: 4px;
-  padding: 0 4px;
-  font-size: 10px;
-  background: var(--onesql-tag-bg);
-  border-radius: 3px;
-  color: var(--onesql-muted);
-}
-
+.result-divider span { width: 35px; height: 3px; border-radius: 4px; background: var(--onesql-muted); }
+.result-divider:focus-visible { outline: 2px solid var(--onesql-biz); outline-offset: -2px; }
+.result-area { flex: 1 0 235px; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.result-area.result-closed { flex: none; }
+.result-bar { display: flex; justify-content: space-between; align-items: center; padding: 0 12px; background: var(--onesql-gutter); }
+.result-bar strong { font-size: 13px; color: var(--onesql-header-fg); }
+.result-area :deep(.el-tabs) { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.result-area :deep(.el-tabs__header) { margin: 0; padding: 0 12px; }
+.result-area :deep(.el-tabs__content) { flex: 1; min-height: 0; padding: 8px 12px; box-sizing: border-box; overflow: auto; }
+.result-area :deep(.el-tab-pane) { height: 100%; min-height: 0; }
 /* ============ 诊断面板 ============ */
 .diagnose-panel {
   padding: 12px;
@@ -970,11 +1035,10 @@ kbd {
 
 /* ============ 历史面板 ============ */
 .history-panel {
-  width: 240px;
-  border-left: 1px solid var(--onesql-border);
   display: flex;
+  flex: 1;
   flex-direction: column;
-  flex-shrink: 0;
+  min-height: 0;
 }
 .history-header {
   display: flex;
@@ -991,6 +1055,12 @@ kbd {
   overflow-y: auto;
 }
 .history-item {
+  display: block;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  border: 0;
+  background: transparent;
   padding: 8px 10px;
   border-bottom: 1px solid var(--onesql-divider);
   cursor: pointer;
@@ -1014,5 +1084,14 @@ kbd {
   gap: 8px;
   font-size: 11px;
   color: var(--onesql-muted);
+}
+@media (max-width: 760px) {
+  .onesql-layout { height: auto; flex-direction: column; }
+  .schema-panel, .schema-panel.collapsed { width: 100%; border-right: 0; border-bottom: 1px solid var(--onesql-border); }
+  .schema-panel .schema-body, .schema-panel .history-panel { max-height: 250px; }
+  .main-panel, .onesql-layout:has(.materialized-result) .main-panel { height: max(620px, calc(100dvh - 100px)); }
+  .onesql-layout:has(.materialized-result) .schema-panel { min-height: 0; }
+  .onesql-layout:has(.materialized-result) { flex-wrap: nowrap; }
+  .materialized-result { flex: none; }
 }
 </style>
