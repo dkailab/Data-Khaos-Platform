@@ -1060,6 +1060,14 @@ export interface ScheduleJob {
   retryCount?: number
   retryInterval?: number
   timeout?: number
+  /** 执行器组：空=任意实例，非空只由同组实例领取 */
+  executorGroup?: string
+  /** 优先级：越大越先被领取 */
+  priority?: number
+  /** 下次触发时刻（后端维护） */
+  nextFireTime?: string
+  owner?: string
+  leaseUntil?: string
   createTime?: string
   updateTime?: string
 }

@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
-import { ArrowLeft, CircleCheck, Clock, Close, Document, Plus, Right, Setting } from '@element-plus/icons-vue'
+import { ArrowLeft, CircleCheck, Clock, Close, Document, Plus, Right, Setting, Share } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import DkButton from '@/paas-ui/DkButton.vue'
 import JobCodeEditor from './JobCodeEditor.vue'
 import JobSqlDiff from './JobSqlDiff.vue'
 import FlinkRunsPanel from './FlinkRunsPanel.vue'
 import {
-  createFlinkAsset, exportFlinkSql, getFlinkVersion, listFlinkAssets, listFlinkVersions, previewFlinkSelection,
-  restoreFlinkVersion, saveFlinkAsset, submitFlinkRun, validateFlinkDraft,
+  createFlinkAsset, exportFlinkSql, getFlinkLineage, getFlinkVersion, listFlinkAssets, listFlinkVersions,
+  previewFlinkSelection, refreshFlinkLineage, restoreFlinkVersion, saveFlinkAsset, submitFlinkRun,
+  validateFlinkDraft,
 } from '@/api/flinkStudio'
-import type { FlinkAsset, FlinkDefinition, FlinkMode, FlinkRevision, FlinkVersionView, FunctionRef, SqlSelectionPreview } from '@/api/flinkStudio'
+import type {
+  FlinkAsset, FlinkDefinition, FlinkLineage, FlinkMode, FlinkRevision, FlinkVersionView, FunctionRef,
+  SqlSelectionPreview,
+} from '@/api/flinkStudio'
 
 const props = defineProps<{ project: string; assets: FlinkAsset[]; fixedMode?: FlinkMode; canRun: boolean }>()
 const emit = defineEmits<{ saved: [] }>()
@@ -55,6 +59,30 @@ interface Tab {
 
 const opened = ref(false)
 const tabs = reactive<Tab[]>([])
+
+const lineageVisible = ref(false)
+const lineageLoading = ref(false)
+const lineageError = ref('')
+const lineage = ref<FlinkLineage>()
+const lineageTab = ref<Tab>()
+
+async function showLineage(tab: Tab, force = false) {
+  if (!tab.assetId || !tab.version) return
+  lineageTab.value = tab
+  lineageVisible.value = true
+  lineageLoading.value = true
+  lineageError.value = ''
+  if (!force) lineage.value = undefined
+  try {
+    lineage.value = force
+      ? await refreshFlinkLineage(props.project, tab.assetId, tab.version)
+      : await getFlinkLineage(props.project, tab.assetId, tab.version)
+  } catch (error: any) {
+    lineageError.value = error?.message || '血缘解析失败，请稍后重试'
+  } finally {
+    lineageLoading.value = false
+  }
+}
 const activeKey = ref<number>()
 const active = computed(() => tabs.find(tab => tab.key === activeKey.value))
 const functionOptions = ref<FlinkAsset[]>([])
@@ -471,6 +499,10 @@ function field(value: unknown) {
                 :loading="tab.busy === 'validate'" @click="debug(tab, false)">
                 <template #icon><CircleCheck /></template>调试校验
               </DkButton>
+              <DkButton v-if="!tab.scratch && tab.version" variant="quiet"
+                :loading="lineageLoading && lineageTab?.key === tab.key" @click="showLineage(tab)">
+                <template #icon><Share /></template>血缘
+              </DkButton>
               <DkButton v-if="tab.language === 'SQL'" :disabled="!!tab.busy || !canRun || !tab.selection.trim()"
                 :loading="tab.busy === 'preview'" title="选中一个有界 SELECT，可一并选中它依赖的临时表或视图。"
                 @click="debug(tab, true)"><template #icon><Right /></template>执行选中</DkButton>
@@ -565,6 +597,31 @@ function field(value: unknown) {
         </template>
       </div>
     </div>
+
+    <el-dialog v-model="lineageVisible" title="实时血缘（表级）" width="560px" append-to-body>
+      <div v-loading="lineageLoading" class="lineage-body">
+        <el-alert v-if="lineageError" :title="lineageError" type="error" :closable="false" show-icon />
+        <template v-else-if="lineage">
+          <p v-if="!lineage.edges.length" class="output-message">
+            当前版本没有解析出 INSERT INTO ... SELECT 血缘。确认脚本最后一条是 INSERT INTO。
+          </p>
+          <div v-for="(edge, index) in lineage.edges" :key="index" class="lineage-row">
+            <span class="lineage-node">{{ edge.source }}</span>
+            <span class="lineage-arrow">→</span>
+            <span class="lineage-node sink">{{ edge.target }}</span>
+          </div>
+          <p class="output-message">
+            共 {{ lineage.edges.length }} 条边；已对上元数据资产的会同步到数据地图。
+          </p>
+        </template>
+      </div>
+      <template #footer>
+        <DkButton variant="quiet" :disabled="lineageLoading || !lineageTab" @click="lineageTab && showLineage(lineageTab, true)">
+          重新解析
+        </DkButton>
+        <DkButton @click="lineageVisible = false">关闭</DkButton>
+      </template>
+    </el-dialog>
   </el-dialog>
 </template>
 
@@ -620,6 +677,11 @@ function field(value: unknown) {
 .history-list button small { grid-column: 1 / -1; color: var(--dk-muted); }
 .diff-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
 .diff-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--dk-border); font-size: 12px; }
+.lineage-body { min-height: 120px; }
+.lineage-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--dk-border); font-size: 13px; }
+.lineage-node { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lineage-node.sink { font-weight: 500; }
+.lineage-arrow { color: var(--dk-muted); }
 @media (max-width: 760px) {
   .ide { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .ide-assets { display: flex; align-items: center; overflow: auto; padding: 2px; border-right: 0; border-bottom: 1px solid var(--dk-border); }

@@ -1,66 +1,49 @@
 package com.datakhaos.schedule.service;
 
-import cn.hutool.core.util.StrUtil;
-import cn.hutool.json.JSONObject;
-import cn.hutool.json.JSONUtil;
-import com.datakhaos.approval.api.service.ApprovalApiClient;
 import com.datakhaos.common.exception.BusinessException;
-import com.datakhaos.common.model.R;
-import com.datakhaos.datasource.api.connector.DatasourceApiClient;
-import com.datakhaos.datasource.api.model.QueryResult;
-import com.datakhaos.pipeline.api.model.PipelineInstanceDto;
 import com.datakhaos.pipeline.api.service.PipelineApiClient;
-import com.datakhaos.schedule.client.DQualityApiClient;
 import com.datakhaos.schedule.entity.ScheduleJob;
 import com.datakhaos.schedule.entity.ScheduleJobLog;
+import com.datakhaos.schedule.handler.JobContext;
+import com.datakhaos.schedule.handler.JobHandler;
+import com.datakhaos.schedule.handler.NoRetryException;
 import com.datakhaos.schedule.mapper.ScheduleJobLogMapper;
-import com.datakhaos.workflow.api.model.FlinkRunDto;
-import com.datakhaos.workflow.api.model.RunAcceptDto;
-import com.datakhaos.workflow.api.model.WorkflowRunDto;
-import com.datakhaos.workflow.api.service.WorkflowApiClient;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClientException;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
- * 任务执行器：创建执行日志、按任务类型执行、失败重试、更新结果。
- * 阻塞式同步执行，由调用方提交到线程池运行。
+ * 任务执行器：创建执行日志、按任务类型分派、失败重试、更新结果。
  *
- * <p>WORKFLOW / SYNC 会触发下游服务并等待至终态；等待超时视为「已受理未完成」，
- * 不再重试，避免重复写入。</p>
+ * <p>具体任务类型由 {@link JobHandler} 提供，新增类型无需修改本类。
+ * 阻塞式同步执行，由调度器提交到线程池运行。</p>
+ *
+ * <p>WORKFLOW / SYNC / FLINK 会触发下游服务；等待超时或提交结果不确定时
+ * 抛 {@link NoRetryException}，不再重试，避免重复写入。</p>
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class JobExecutor {
 
     private final ScheduleJobLogMapper jobLogMapper;
-    private final DatasourceApiClient datasourceApiClient;
-    private final DQualityApiClient dQualityApiClient;
-    private final WorkflowApiClient workflowApiClient;
-    private final PipelineApiClient pipelineApiClient;
-    private final ApprovalApiClient approvalApiClient;
+    private final Map<String, JobHandler> handlers;
 
-    /** 正在运行的任务ID（防止并发触发同一任务） */
+    /** 正在运行的任务ID（同一实例内防止并发触发；跨实例由调度器租约保证） */
     private final Set<String> running = ConcurrentHashMap.newKeySet();
 
-    /** 业务日期时区：计划触发时刻统一按上海时间解释 */
-    private static final ZoneId BIZ_ZONE = ZoneId.of("Asia/Shanghai");
-
-    private static final DateTimeFormatter REQUEST_KEY_FMT = DateTimeFormatter.ofPattern("yyyyMMddHHmm");
+    public JobExecutor(ScheduleJobLogMapper jobLogMapper, List<JobHandler> handlers) {
+        this.jobLogMapper = jobLogMapper;
+        this.handlers = handlers.stream().collect(Collectors.toUnmodifiableMap(
+                handler -> handler.type().toUpperCase(Locale.ROOT), handler -> handler, (first, second) -> first));
+    }
 
     public boolean isRunning(String jobId) {
         return running.contains(jobId);
@@ -143,306 +126,16 @@ public class JobExecutor {
     }
 
     private int doExecute(ScheduleJob job, ScheduleJobLog jobLog) {
-        String type = job.getJobType() == null ? "" : job.getJobType().toUpperCase();
-        switch (type) {
-            case "SQL" -> {
-                if (StrUtil.isBlank(job.getDatasourceId()) || StrUtil.isBlank(job.getTargetSql())) {
-                    throw new BusinessException("SQL 任务未配置数据源或 SQL");
-                }
-                R<QueryResult> result = datasourceApiClient.executeRaw(job.getDatasourceId(), job.getTargetSql());
-                if (result == null || result.getCode() != 0) {
-                    throw new BusinessException(result == null ? "SQL 执行失败" : result.getMsg());
-                }
-                QueryResult data = result.getData();
-                return data == null || data.getRowCount() == null ? 0 : data.getRowCount();
+        String type = job.getJobType() == null ? "" : job.getJobType().toUpperCase(Locale.ROOT);
+        JobHandler handler = handlers.get(type);
+        if (handler == null) {
+            // 历史遗留类型：明确失败，避免静默成功
+            if ("REFRESH".equals(type) || "PUSH".equals(type)) {
+                throw new BusinessException("任务类型 " + job.getJobType()
+                        + " 尚未接入真实执行，请改用 WORKFLOW 或 SYNC");
             }
-            case "QUALITY" -> {
-                // 数据质量周期稽核：params 需携带质量任务ID，如 {"taskId":"..."}
-                String taskId = parseJsonField(job.getParams(), "taskId");
-                if (StrUtil.isBlank(taskId)) {
-                    throw new BusinessException("QUALITY 任务未配置质量任务ID（params.taskId）");
-                }
-                R<Void> r = dQualityApiClient.runTask(taskId, "SCHEDULE");
-                if (r == null || r.getCode() != 0) {
-                    throw new BusinessException(r == null ? "质量稽核触发失败" : r.getMsg());
-                }
-                return 1;
-            }
-            case "WORKFLOW" -> {
-                return executeWorkflowJob(job, jobLog);
-            }
-            case "FLINK" -> {
-                return executeFlinkJob(job, jobLog);
-            }
-            case "SYNC" -> {
-                return executeSyncJob(job, jobLog);
-            }
-            // 尚无真实实现的分支：明确失败，避免静默成功
-            case "REFRESH", "PUSH" -> throw new BusinessException(
-                    "任务类型 " + job.getJobType() + " 尚未接入真实执行，请改用 WORKFLOW 或 SYNC");
-            default -> throw new BusinessException("不支持的任务类型: " + job.getJobType());
+            throw new BusinessException("不支持的任务类型: " + job.getJobType());
         }
-    }
-
-    // ==================== WORKFLOW ====================
-
-    /** 触发工作流并等待运行至终态 */
-    private int executeWorkflowJob(ScheduleJob job, ScheduleJobLog jobLog) {
-        String wfId = resolveRef(job, "workflowId");
-        if (StrUtil.isBlank(wfId)) {
-            throw new BusinessException("WORKFLOW 任务未配置关联工作流（refId 或 params.workflowId）");
-        }
-        int timeout = timeoutSeconds(job, WorkflowApiClient.DEFAULT_TIMEOUT_SECONDS);
-        Map<String, Object> params = parseParams(job.getParams());
-
-        // 幂等键与业务日期：调度触发按计划触发时刻生成（稳定可重放）；手动触发按 params.bizDate 或上海前一日
-        LocalDateTime scheduledAt = jobLog.getScheduledAt();
-        String bizDate = resolveBizDate(job, jobLog);
-        String requestId;
-        if (scheduledAt != null) {
-            ZonedDateTime plan = scheduledAt.atZone(BIZ_ZONE);
-            requestId = "sched:" + job.getId() + ":" + plan.format(REQUEST_KEY_FMT);
-        } else {
-            requestId = "manual:" + jobLog.getId();
-        }
-
-        RunAcceptDto accept;
-        try {
-            accept = workflowApiClient.triggerWithRequest(wfId, params, "SCHEDULE",
-                    job.getId(), jobLog.getId(), requestId, bizDate, scheduledAt);
-        } catch (RestClientException | IllegalStateException e) {
-            WorkflowRunDto existing = workflowApiClient.findByScheduleLog(wfId, jobLog.getId());
-            if (existing == null || StrUtil.isBlank(existing.getId())) {
-                throw new NoRetryException("无法确认工作流是否已受理: scheduleLogId=" + jobLog.getId()
-                        + "，bizDate=" + bizDate + "，error=" + e.getMessage());
-            }
-            // 若查到的是上一次已结束的失败运行，当前提交结果仍然不确定。
-            if (WorkflowApiClient.isFinal(existing.getRunStatus())) {
-                throw new NoRetryException("查询到失败或停止的工作流: runId=" + existing.getId()
-                        + "，本次提交结果未确认");
-            }
-            accept = RunAcceptDto.duplicate(existing.getId(), bizDate);
-        }
-        if (accept == null) {
-            throw new NoRetryException("工作流受理无响应: bizDate=" + bizDate + "，requestId=" + requestId);
-        }
-        if (RunAcceptDto.STATE_REJECTED.equals(accept.getState())) {
-            if ("RUN_ALREADY_ACTIVE".equals(accept.getRejectCode())) {
-                throw new NoRetryException("业务日已有活跃运行: bizDate=" + bizDate
-                        + "，activeRunId=" + accept.getActiveRunId());
-            }
-            if ("REQUEST_CONFLICT".equals(accept.getRejectCode())) {
-                throw new NoRetryException("同键请求参数冲突: requestId=" + requestId);
-            }
-            throw new BusinessException("工作流受理被拒绝: " + accept.getRejectCode()
-                    + ": " + (accept.getRejectMessage() == null ? "-" : accept.getRejectMessage()));
-        }
-        String runId = accept.getRunId();
-        if (StrUtil.isBlank(runId)) {
-            throw new NoRetryException("工作流受理结果缺少 runId: bizDate=" + bizDate);
-        }
-        log.info("WORKFLOW 任务 {} 已触发工作流 {}，runId={}", job.getJobName(), wfId, runId);
-        WorkflowRunDto run;
-        try {
-            run = workflowApiClient.waitForRun(runId, timeout);
-        } catch (WorkflowApiClient.RunTimeoutException e) {
-            throw new NoRetryException("工作流已受理但等待超时: runId=" + runId + "，" + e.getMessage());
-        }
-        if ("RECOVERY_REQUIRED".equals(run.getRunStatus())) {
-            throw new NoRetryException("工作流执行结果需要核查: runId=" + runId);
-        }
-        if (!"SUCCESS".equals(run.getRunStatus())) {
-            throw new BusinessException("工作流运行失败: runId=" + runId
-                    + "，status=" + run.getRunStatus()
-                    + "，error=" + (run.getErrorMessage() == null ? "-" : run.getErrorMessage()));
-        }
-        log.info("WORKFLOW 任务 {} 完成，runId={}", job.getJobName(), runId);
-        return 1;
-    }
-
-    // ==================== FLINK（实时作业） ====================
-
-    /**
-     * 触发已审批的实时作业版本。
-     *
-     * <p>以 SUBMITTED 视为成功：流作业不会自行结束，调度只负责「提交」。
-     * 同一计划时刻生成稳定 requestId，重复触发命中同一条运行记录，
-     * 不会产生第二条活动运行。</p>
-     */
-    private int executeFlinkJob(ScheduleJob job, ScheduleJobLog jobLog) {
-        String projectId = parseJsonField(job.getParams(), "projectId");
-        if (StrUtil.isBlank(projectId)) {
-            throw new BusinessException("FLINK 任务未配置项目（params.projectId）");
-        }
-        String assetId = resolveRef(job, "assetId");
-        if (StrUtil.isBlank(assetId)) {
-            throw new BusinessException("FLINK 任务未配置作业资产（refId 或 params.assetId）");
-        }
-        int version = parseFlinkVersion(job);
-        try {
-            if (approvalApiClient.findApproved(ApprovalApiClient.TYPE_FLINK_JOB, assetId, version).isEmpty()) {
-                throw new BusinessException("该作业版本未取得审批，拒绝提交");
-            }
-        } catch (IllegalStateException e) {
-            throw new NoRetryException("无法确认作业版本是否已审批: " + e.getMessage());
-        }
-        // 作业提交接口只收 UUID 作为幂等键：由「任务+计划时刻」派生 UUIDv5，
-        // 既满足格式要求，又保证同一计划时刻重复触发命中同一条运行记录。
-        String requestKey;
-        if (jobLog.getScheduledAt() != null) {
-            requestKey = "sched:" + job.getId() + ":"
-                    + jobLog.getScheduledAt().atZone(BIZ_ZONE).format(REQUEST_KEY_FMT);
-        } else {
-            requestKey = "manual:" + jobLog.getId();
-        }
-        String requestId = UUID.nameUUIDFromBytes(requestKey.getBytes(StandardCharsets.UTF_8)).toString();
-        FlinkRunDto run;
-        try {
-            run = workflowApiClient.triggerFlink(projectId, assetId, version, requestId);
-        } catch (RestClientException | IllegalStateException e) {
-            throw new NoRetryException("无法确认实时作业是否已提交: " + e.getMessage());
-        }
-        if (run == null || StrUtil.isBlank(run.id())) {
-            throw new NoRetryException("实时作业提交返回空运行记录");
-        }
-        String state = run.state() == null ? "" : run.state();
-        if ("SUBMITTED".equals(state)) {
-            log.info("FLINK 任务 {} 已提交实时作业 {} v{}，runId={}，engineJobId={}",
-                    job.getJobName(), assetId, version, run.id(), run.engineJobId());
-            return 1;
-        }
-        if ("FAILED".equals(state) || "CANCELED".equals(state)) {
-            throw new BusinessException("实时作业提交失败: runId=" + run.id() + "，error="
-                    + (run.message() == null ? "-" : run.message()));
-        }
-        throw new NoRetryException("实时作业提交结果待确认: runId=" + run.id() + "，state=" + state);
-    }
-
-    private int parseFlinkVersion(ScheduleJob job) {
-        String text = parseJsonField(job.getParams(), "version");
-        try {
-            int version = Integer.parseInt(text == null ? "" : text.strip());
-            if (version > 0) {
-                return version;
-            }
-        } catch (NumberFormatException ignored) {
-            // 统一走下面的错误提示
-        }
-        throw new BusinessException("FLINK 任务未配置有效的作业版本（params.version）");
-    }
-
-    // ==================== SYNC（管道） ====================
-
-    /** 触发管道任务并等待实例至终态 */
-    private int executeSyncJob(ScheduleJob job, ScheduleJobLog jobLog) {
-        String taskId = resolveRef(job, "pipelineTaskId");
-        if (StrUtil.isBlank(taskId)) {
-            throw new BusinessException("SYNC 任务未配置关联管道任务（refId 或 params.pipelineTaskId）");
-        }
-        String bizDate = resolveBizDate(job, jobLog);
-        int timeout = timeoutSeconds(job, PipelineApiClient.DEFAULT_TIMEOUT_SECONDS);
-        PipelineApiClient.TriggerResult triggerResult =
-                pipelineApiClient.triggerSafely(taskId, "SCHEDULE", null, null, bizDate);
-        PipelineInstanceDto instance = triggerResult.instance();
-        if (instance == null || StrUtil.isBlank(instance.getId())) {
-            throw new NoRetryException("SYNC 任务触发返回空实例，无法确认是否已受理");
-        }
-        log.info("SYNC 任务 {} 已触发管道任务 {}，instanceId={}{}", job.getJobName(), taskId, instance.getId(),
-                triggerResult.alreadySubmitted() ? "（超时后确认已提交）" : "");
-        PipelineInstanceDto finished;
-        try {
-            finished = pipelineApiClient.waitForInstance(instance.getId(), timeout);
-        } catch (PipelineApiClient.InstanceTimeoutException e) {
-            throw new NoRetryException("管道已受理但等待超时: instanceId=" + instance.getId() + "，" + e.getMessage());
-        }
-        if (finished.getStatus() == null || finished.getStatus() == 0) {
-            throw new NoRetryException("管道实例仍未完成: instanceId=" + finished.getId());
-        }
-        if (Integer.valueOf(PipelineInstanceDto.COMMIT_UNCONFIRMED).equals(finished.getStatus())) {
-            throw new NoRetryException("管道提交结果待核查: instanceId=" + finished.getId());
-        }
-        if (finished.getStatus() != 1) {
-            throw new BusinessException("管道执行失败: instanceId=" + finished.getId()
-                    + "，error=" + (finished.getErrorMessage() == null ? "-" : finished.getErrorMessage()));
-        }
-        long rows = finished.getRows() == null ? 0 : finished.getRows();
-        log.info("SYNC 任务 {} 完成，instanceId={}，影响行数 {}", job.getJobName(), finished.getId(), rows);
-        return (int) Math.min(rows, Integer.MAX_VALUE);
-    }
-
-    // ==================== 工具 ====================
-
-    /**
-     * 业务日期：调度触发按计划触发时刻（上海时区）的前一日，稳定可重放；
-     * 手动触发取 params.bizDate，缺省取上海时区前一日。
-     */
-    private String resolveBizDate(ScheduleJob job, ScheduleJobLog jobLog) {
-        LocalDateTime scheduledAt = jobLog.getScheduledAt();
-        if (scheduledAt != null) {
-            return scheduledAt.atZone(BIZ_ZONE).toLocalDate().minusDays(1).toString();
-        }
-        LocalDate date = parseDate(parseJsonField(job.getParams(), "bizDate"));
-        if (date == null) {
-            date = LocalDate.now(BIZ_ZONE).minusDays(1);
-        }
-        return date.toString();
-    }
-
-    /** 解析关联ID：refId 优先，回退 params JSON 中指定字段 */
-    private String resolveRef(ScheduleJob job, String paramsKey) {
-        if (StrUtil.isNotBlank(job.getRefId())) {
-            return job.getRefId();
-        }
-        return parseJsonField(job.getParams(), paramsKey);
-    }
-
-    private int timeoutSeconds(ScheduleJob job, int defaultSeconds) {
-        return job.getTimeout() == null || job.getTimeout() <= 0 ? defaultSeconds : job.getTimeout();
-    }
-
-    /** 严格 YYYY-MM-DD 解析，非法返回 null */
-    private LocalDate parseDate(String text) {
-        if (StrUtil.isBlank(text)) {
-            return null;
-        }
-        try {
-            return LocalDate.parse(text.trim(), DateTimeFormatter.ISO_LOCAL_DATE);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    /** 解析 JSON 字段，空串安全 */
-    private String parseJsonField(String json, String field) {
-        if (StrUtil.isBlank(json)) {
-            return null;
-        }
-        try {
-            JSONObject obj = JSONUtil.parseObj(json);
-            return obj.getStr(field);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    /** params JSON → Map（供工作流触发参数使用） */
-    private Map<String, Object> parseParams(String json) {
-        if (StrUtil.isBlank(json)) {
-            return Map.of();
-        }
-        try {
-            JSONObject obj = JSONUtil.parseObj(json);
-            return obj;
-        } catch (Exception e) {
-            log.warn("解析任务 params 失败，按空参数处理: {}", json);
-            return Map.of();
-        }
-    }
-
-    /** 已受理但未确认完成：不再重试，避免重复写入 */
-    private static class NoRetryException extends RuntimeException {
-        NoRetryException(String message) {
-            super(message);
-        }
+        return handler.execute(JobContext.of(job, jobLog));
     }
 }

@@ -59,6 +59,25 @@ public class ScheduleJob extends BaseEntity {
     /** 超时（秒） */
     private Integer timeout;
 
+    /** 执行器组：空表示任意实例可执行，非空只由同组实例领取 */
+    private String executorGroup;
+
+    /** 优先级：数值越大越先被领取，默认 0 */
+    private Integer priority;
+
+    /** 下次触发时刻（调度器维护，不在表单里直接编辑） */
+    private LocalDateTime nextFireTime;
+
+    /** 当前领取实例；为空表示未被领取 */
+    private String owner;
+
+    /** 租约到期时间：实例失联后由其他实例接管 */
+    private LocalDateTime leaseUntil;
+
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
+
+    /** 本次领取的计划触发时刻，仅内存使用，用于业务日与幂等键 */
+    @TableField(exist = false)
+    private LocalDateTime claimedFireTime;
 }

@@ -50,6 +50,10 @@
       </el-table-column>
       <el-table-column prop="jobGroup" label="分组" min-width="110" />
       <el-table-column prop="cronExpression" label="Cron 表达式" min-width="130" />
+      <el-table-column label="执行器组" width="100">
+        <template #default="{ row }">{{ row.executorGroup || '任意' }}</template>
+      </el-table-column>
+      <el-table-column prop="nextFireTime" label="下次触发" width="170" />
       <el-table-column prop="targetTable" label="目标表" min-width="110" />
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
@@ -101,6 +105,14 @@
         </el-form-item>
         <el-form-item label="Cron 表达式" prop="cronExpression">
           <el-input v-model="form.cronExpression" placeholder="如 0 0 2 * * ?" />
+        </el-form-item>
+        <el-form-item label="执行器组">
+          <el-input v-model="form.executorGroup" clearable placeholder="留空=任意实例，如 default / heavy" />
+          <div class="field-hint">多副本部署时只由同组实例领取；单副本可留空。</div>
+        </el-form-item>
+        <el-form-item label="优先级">
+          <el-input-number v-model="form.priority" :min="0" :max="100" />
+          <div class="field-hint">同一批到期任务按优先级从大到小领取。</div>
         </el-form-item>
 
         <el-form-item v-if="form.jobType === 'WORKFLOW'" label="关联工作流">
@@ -404,7 +416,7 @@ function openCreate() {
   Object.assign(form, {
     jobName: '', jobType: 'WORKFLOW', jobGroup: '', cronExpression: '', datasourceId: '', targetSql: '',
     targetTable: '', params: '', refType: 'WORKFLOW', refId: '', status: 0, retryCount: 0,
-    retryInterval: 0, timeout: 60,
+    retryInterval: 0, timeout: 60, executorGroup: '', priority: 0,
   })
   flinkProjectId.value = ''
   flinkVersion.value = 1

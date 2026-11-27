@@ -56,6 +56,7 @@ public class FlinkDeploymentService {
     private final FlinkPressureMonitor pressureMonitor;
     private final FlinkKafkaMonitor kafkaMonitor;
     private final FlinkEventTimeMonitor eventTimeMonitor;
+    private final FlinkLineageService lineage;
 
     public RunPage page(String project, String assetId, long current, long size) {
         authorize(project, DEVELOP);
@@ -174,6 +175,10 @@ public class FlinkDeploymentService {
             throw new BusinessException(409, "此作业已有活动运行，请先查看或刷新运行记录");
         }
         String recoveryPath = source == null ? null : source.getSavepointPath();
+        if (!jar && lineage != null) {
+            // 血缘跟随真实运行记录；解析失败已在服务内降级，不影响提交。
+            lineage.record(project, assetId, version, run.getId());
+        }
         return jar ? executeJar(run, job.definition(), recoveryPath) : execute(run, script, recoveryPath);
     }
 

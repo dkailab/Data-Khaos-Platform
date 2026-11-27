@@ -173,7 +173,7 @@ class FlinkSqlDeliveryTest {
     }
 
     private FlinkDeploymentService service(FlinkRuntimeClient runtime) {
-        return new FlinkDeploymentService(runs, assets, studio, access, runtime, null, null, null, null);
+        return new FlinkDeploymentService(runs, assets, studio, access, runtime, null, null, null, null, null);
     }
 
     private FlinkDefinition definition(String sql) {

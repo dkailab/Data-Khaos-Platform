@@ -16,9 +16,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 
@@ -72,6 +74,8 @@ public class ScheduleService {
         job.setRetryCount(job.getRetryCount() == null ? 0 : job.getRetryCount());
         job.setRetryInterval(job.getRetryInterval() == null ? 60 : job.getRetryInterval());
         job.setTimeout(job.getTimeout() == null ? 3600 : job.getTimeout());
+        job.setPriority(job.getPriority() == null ? 0 : job.getPriority());
+        job.setNextFireTime(nextFire(job.getCronExpression()));
         jobMapper.insert(job);
     }
 
@@ -81,6 +85,8 @@ public class ScheduleService {
             throw new BusinessException("任务ID不能为空");
         }
         getJob(job.getId());
+        // 改 cron 后必须重算下次触发时刻，否则旧时刻会一直生效。
+        job.setNextFireTime(nextFire(job.getCronExpression()));
         jobMapper.updateById(job);
     }
 
@@ -97,6 +103,9 @@ public class ScheduleService {
     public void start(String id) {
         ScheduleJob job = getJob(id);
         job.setStatus(1);
+        job.setNextFireTime(nextFire(job.getCronExpression()));
+        job.setOwner(null);
+        job.setLeaseUntil(null);
         jobMapper.updateById(job);
     }
 
@@ -105,6 +114,8 @@ public class ScheduleService {
     public void stop(String id) {
         ScheduleJob job = getJob(id);
         job.setStatus(0);
+        job.setOwner(null);
+        job.setLeaseUntil(null);
         jobMapper.updateById(job);
     }
 
@@ -211,10 +222,23 @@ public class ScheduleService {
         }
         if (StrUtil.isNotBlank(job.getCronExpression())) {
             try {
-                org.springframework.scheduling.support.CronExpression.parse(job.getCronExpression());
+                CronExpression.parse(job.getCronExpression());
             } catch (Exception e) {
                 throw new BusinessException("Cron 表达式不合法: " + job.getCronExpression());
             }
+        }
+    }
+
+    /** 计算下次触发时刻；cron 非法返回 null（任务不会自动触发，由日志告警）。 */
+    private LocalDateTime nextFire(String cron) {
+        if (StrUtil.isBlank(cron)) {
+            return null;
+        }
+        try {
+            return CronExpression.parse(cron).next(LocalDateTime.now());
+        } catch (RuntimeException e) {
+            log.warn("cron 解析失败，任务不会自动触发: {}", cron);
+            return null;
         }
     }
 }

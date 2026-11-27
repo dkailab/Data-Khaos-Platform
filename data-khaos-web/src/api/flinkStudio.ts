@@ -314,3 +314,27 @@ export function getFlinkEventTimeAlerts(project: string, id: string, runId: stri
 export function configureFlinkEventTimeAlerts(project: string, id: string, runId: string, enabled: boolean, vertexId?: string) {
   return put<FlinkEventTimeHistory>(eventTimeAlertsPath(project, id, runId), { enabled, vertexId })
 }
+
+export interface FlinkLineageNode {
+  name: string
+  assetId?: string | null
+  connector?: string | null
+  physicalName?: string | null
+  role: 'SOURCE' | 'SINK'
+}
+
+export interface FlinkLineage {
+  assetId: string
+  version: number
+  sink?: string | null
+  nodes: FlinkLineageNode[]
+  edges: Array<{ source: string; target: string }>
+}
+
+export function getFlinkLineage(project: string, id: string, version: number) {
+  return get<FlinkLineage>(`${revision(project, id, version)}/lineage`)
+}
+
+export function refreshFlinkLineage(project: string, id: string, version: number) {
+  return post<FlinkLineage>(`${revision(project, id, version)}/lineage/refresh`)
+}

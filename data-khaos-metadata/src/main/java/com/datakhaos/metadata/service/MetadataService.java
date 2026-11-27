@@ -290,7 +290,7 @@ public class MetadataService {
                 .or().eq(MetaTableLineage::getTargetTableId, tableId));
     }
 
-    /** 记录血缘关系 */
+    /** 记录血缘关系；相同 source/target/type 只保留一条，重复调用幂等。 */
     public void saveLineage(MetaTableLineage lineage) {
         if (StrUtil.isBlank(lineage.getSourceTableId()) || StrUtil.isBlank(lineage.getTargetTableId())) {
             throw new BusinessException("源表与目标表不能为空");
@@ -298,7 +298,13 @@ public class MetadataService {
         if (lineage.getRelationType() == null) {
             lineage.setRelationType("ETL");
         }
-        lineageMapper.insert(lineage);
+        boolean exists = lineageMapper.selectCount(new LambdaQueryWrapper<MetaTableLineage>()
+                .eq(MetaTableLineage::getSourceTableId, lineage.getSourceTableId())
+                .eq(MetaTableLineage::getTargetTableId, lineage.getTargetTableId())
+                .eq(MetaTableLineage::getRelationType, lineage.getRelationType())) > 0;
+        if (!exists) {
+            lineageMapper.insert(lineage);
+        }
     }
 
     /**

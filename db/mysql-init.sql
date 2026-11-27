@@ -512,8 +512,15 @@ CREATE TABLE IF NOT EXISTS schedule_job (
     retry_count     INT DEFAULT 0 COMMENT '重试次数',
     retry_interval  INT DEFAULT 60 COMMENT '重试间隔(秒)',
     timeout         INT DEFAULT 3600 COMMENT '超时(秒)',
+    executor_group  VARCHAR(32) COMMENT '执行器组，空=任意实例',
+    priority        INT NOT NULL DEFAULT 0 COMMENT '优先级，越大越先',
+    next_fire_time  DATETIME COMMENT '下次触发时刻',
+    owner           VARCHAR(64) COMMENT '领取实例',
+    lease_until     DATETIME COMMENT '租约到期时间',
     create_time     DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    update_time     DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间'
+    update_time     DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间',
+    KEY idx_schedule_job_due (status, next_fire_time),
+    KEY idx_schedule_job_group_due (executor_group, status, next_fire_time)
 ) ENGINE=InnoDB COMMENT='任务定义表';
 
 CREATE TABLE IF NOT EXISTS schedule_job_log (

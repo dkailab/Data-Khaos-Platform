@@ -456,6 +456,11 @@ CREATE TABLE schedule_job (
     retry_count     INT DEFAULT 0,
     retry_interval  INT DEFAULT 60,             -- 秒
     timeout         INT DEFAULT 3600,           -- 秒
+    executor_group  VARCHAR(32),                -- 执行器组，空=任意实例
+    priority        INT DEFAULT 0,              -- 优先级，越大越先
+    next_fire_time  DATETIME,                   -- 下次触发时刻
+    owner           VARCHAR(64),                -- 领取实例
+    lease_until     DATETIME,                   -- 租约到期时间
     create_time     DATETIME DEFAULT CURRENT_TIMESTAMP(),
     update_time     DATETIME DEFAULT CURRENT_TIMESTAMP()
 );

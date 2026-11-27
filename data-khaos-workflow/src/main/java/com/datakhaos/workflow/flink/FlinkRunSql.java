@@ -60,7 +60,8 @@ public record FlinkRunSql(List<String> setup, String insert) {
 
     public record Selection(List<String> setup, String query) {}
 
-    private static List<String> split(String script) {
+    /** 按分号拆分语句，忽略字符串/标识符引号与注释中的分号；供解析与血缘复用。 */
+    static List<String> split(String script) {
         List<String> statements = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         char quote = 0;
