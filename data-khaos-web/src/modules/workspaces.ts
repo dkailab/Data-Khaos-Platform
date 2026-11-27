@@ -38,10 +38,44 @@ const lineage: Workspace = {
   ],
 }
 
+const realtime: Workspace = {
+  key: 'realtime',
+  title: '实时运维',
+  icon: 'Monitor',
+  sections: [{ title: '运行与交付', links: [
+    { title: '作业运维', path: '/realtime/operations', icon: 'Monitor' },
+    { title: '实时数仓', path: '/realtime/warehouse', icon: 'DataBoard' },
+  ] }],
+}
+
+function developmentWorkspace(features: FeatureDef[]): Workspace {
+  const enabled = (key: string) => features.some(feature => feature.key === key)
+  const sections: Workspace['sections'] = [
+    { title: '工作台', links: [{ title: '作业开发首页', path: '/jobs', icon: 'Odometer' }] },
+  ]
+  const hasCompute = enabled('dev_flink')
+  if (hasCompute) sections.push({ title: '实时作业', links: [
+    { title: '实时 SQL 作业', path: '/jobs/realtime/sql', icon: 'EditPen' },
+    { title: '实时程序作业', path: '/jobs/realtime/jar', icon: 'Files' },
+  ] })
+  const offline: Workspace['sections'][number]['links'] = []
+  if (hasCompute) offline.push(
+    { title: '批处理 SQL 作业', path: '/jobs/offline/sql', icon: 'EditPen' },
+    { title: '批处理程序作业', path: '/jobs/offline/jar', icon: 'Files' },
+  )
+  if (enabled('dev_workflow')) offline.push({ title: '调度工作流', path: '/jobs/offline', match: '/jobs/offline/edit/', icon: 'Share' })
+  if (offline.length) sections.push({ title: '离线作业', links: offline })
+  const tools: Workspace['sections'][number]['links'] = visibleLinks(features, 'EditPen')
+  if (hasCompute) tools.unshift({ title: '函数库', path: '/jobs/functions', icon: 'Collection' })
+  if (enabled('dev_onesql')) tools.unshift({ title: 'OneSQL 取数', path: '/jobs/onesql', icon: 'Search', match: '/jobs/onesql/' })
+  if (tools.length) sections.push({ title: '项目与工具', links: tools })
+  return { key: 'dev', title: '作业开发', icon: 'EditPen', sections }
+}
+
 function visibleLinks(features: FeatureDef[], icon: string) {
   const seen = new Set<string>()
   return features.flatMap(feature => {
-    if (!feature.path || seen.has(feature.path) || ['gov_lineage', 'ops_user', 'ops_perm'].includes(feature.key)) return []
+    if (!feature.path || seen.has(feature.path) || ['gov_lineage', 'ops_user', 'ops_perm', 'dev_flink', 'dev_workflow', 'dev_onesql'].includes(feature.key)) return []
     seen.add(feature.path)
     return [{
       title: feature.title,
@@ -55,6 +89,11 @@ function visibleLinks(features: FeatureDef[], icon: string) {
 export function buildWorkspaces(categories: CategoryDef[], system: CategoryDef, canConfig: boolean): Workspace[] {
   const list = [portal]
   for (const category of [...categories, system]) {
+    if (category.key === 'dev') {
+      list.push(developmentWorkspace(category.features))
+      if (category.features.some(feature => feature.key === 'dev_flink')) list.push(realtime)
+      continue
+    }
     const links = visibleLinks(category.features, category.icon)
     if (category.key === 'asset') {
       links.unshift(dataMap)
@@ -83,13 +122,16 @@ export function workspaceHome(workspace: Workspace) {
   return workspace.sections[0].links[0].path
 }
 
-export function findWorkspace(workspaces: Workspace[], path: string) {
+export function findWorkspace(workspaces: Workspace[], path: string, developmentFeatures: FeatureDef[] = []) {
+  if (path === '/jobs' || path.startsWith('/jobs/') || path === '/workflow/list' || path.startsWith('/workflow/edit/')) {
+    return workspaces.find(workspace => workspace.key === 'dev') || developmentWorkspace(developmentFeatures)
+  }
   const matches = (link: WorkspaceLink) => link.path === path || (link.match && path.startsWith(link.match))
-  return workspaces.find(workspace => workspace.sections.some(section => section.links.some(matches))) || portal
+  return workspaces.find(workspace => workspace.sections.some(section => section.links.some(matches))) || (path === '/realtime' || path.startsWith('/realtime/') ? realtime : portal)
 }
 
 const productGroups = [
-  { key: 'engineering', title: '数据工程', products: ['ingress', 'dev', 'ops'] },
+  { key: 'engineering', title: '数据工程', products: ['dev', 'ingress', 'realtime', 'ops'] },
   { key: 'governance', title: '资产与治理', products: ['asset', 'lineage', 'govern'] },
   { key: 'consumption', title: '分析与平台', products: ['service', 'system'] },
 ]
@@ -104,7 +146,8 @@ export function groupProducts(workspaces: Workspace[]) {
 
 const descriptions: Record<string, string> = {
   ingress: '配置数据源，创建和管理同步任务。',
-  dev: '编写 SQL，组织工作流与调度任务。',
+  dev: '在一个项目里开发实时和离线作业，编排调度并用 OneSQL 核对结果。',
+  realtime: '查看作业运行、检查点和实时数仓产出。',
   ops: '处理数据告警，进入日常运维。',
   asset: '查找数据表、字段、模型和指标。',
   lineage: '追溯表的来源、去向与转换关系。',

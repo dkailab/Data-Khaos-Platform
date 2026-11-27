@@ -18,6 +18,8 @@
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-sql": "^6.10.0",
     "@codemirror/language": "^6.12.4",
+    "@codemirror/legacy-modes": "6.4.1",
+    "@codemirror/merge": "^6.13.0",
     "@codemirror/search": "^6.7.1",
     "@codemirror/state": "^6.7.1",
     "@codemirror/theme-one-dark": "^6.1.3",

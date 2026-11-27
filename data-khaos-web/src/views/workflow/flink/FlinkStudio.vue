@@ -1,22 +1,27 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, toRef, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DkButton from '@/paas-ui/DkButton.vue'
 import DkPageHeader from '@/paas-ui/DkPageHeader.vue'
 import FlinkRunsPanel from './FlinkRunsPanel.vue'
-import { listMyProjectWorkspaces, type ProjectWorkspace } from '@/api/project-group'
+import JobSqlWorkspace from './JobSqlWorkspace.vue'
+import { useRealtimeProject } from '@/views/realtime/projectContext'
 import {
-  createFlinkAsset, exportFlinkSql, getFlinkVersion, listFlinkAssets, listFlinkVersions,
+  createFlinkAsset, getFlinkVersion, listFlinkAssets, listFlinkVersions,
   restoreFlinkVersion, saveFlinkAsset,
 } from '@/api/flinkStudio'
 import type {
-  FlinkAsset, FlinkAssetKind, FlinkDefinition, FlinkFunctionType, FlinkLanguage, FlinkMode, FlinkRevision, FlinkVersionView, FunctionRef,
+  FlinkAsset, FlinkAssetKind, FlinkDefinition, FlinkFunctionType, FlinkLanguage, FlinkMode, FlinkRevision, FlinkVersionView,
 } from '@/api/flinkStudio'
 
-const projects = ref<ProjectWorkspace[]>([])
-const project = ref('')
-const kind = ref<FlinkAssetKind>('JOB')
-const kindTitle: Record<FlinkAssetKind, string> = { JOB: 'SQL 作业', JAR_JOB: 'JAR 作业', FUNCTION: '函数库' }
+const props = defineProps<{ kind: FlinkAssetKind; fixedMode?: FlinkMode }>()
+const kind = toRef(props, 'kind')
+const { project, canRun } = useRealtimeProject()
+const kindTitle: Record<FlinkAssetKind, string> = { JOB: 'SQL 作业', JAR_JOB: '程序作业', FUNCTION: '函数库' }
+const title = computed(() => {
+  const prefix = props.fixedMode === 'STREAMING' ? '实时 ' : props.fixedMode === 'BATCH' ? '批处理 ' : ''
+  return prefix + kindTitle[kind.value]
+})
 const functionTypes = [
   { value: 'UDF', label: 'UDF · 标量函数' },
   { value: 'UDTF', label: 'UDTF · 表值函数' },
@@ -25,27 +30,27 @@ const functionTypes = [
 const assets = ref<FlinkAsset[]>([])
 const keyword = ref('')
 const nextKeyword = ref('')
+const mode = ref<FlinkMode>()
 const current = ref(1)
 const total = ref(0)
 const size = 15
-const projectLoading = ref(false)
 const loading = ref(false)
 const failed = ref('')
 let listSequence = 0
 
+const sqlWorkspace = ref<InstanceType<typeof JobSqlWorkspace>>()
 const editor = ref(false)
 const editing = ref<FlinkVersionView>()
 const saving = ref(false)
 const formError = ref('')
 const form = reactive({
   code: '', name: '', note: '', mode: 'STREAMING' as FlinkMode, parallelism: 1,
-  sql: '', functions: [] as FunctionRef[], language: 'JAVA' as FlinkLanguage, className: '', jarUri: '', functionType: '' as FlinkFunctionType | '',
+  language: 'JAVA' as FlinkLanguage, className: '', jarUri: '', functionType: '' as FlinkFunctionType | '',
   jarId: '', entryClass: '', arguments: [] as string[],
 })
-const functionOptions = ref<FlinkAsset[]>([])
-let functionSequence = 0
 
 const viewedAsset = ref<FlinkAsset>()
+const runningAsset = ref<FlinkAsset>()
 const history = ref<FlinkRevision[]>([])
 const historyPage = ref(1)
 const historyTotal = ref(0)
@@ -53,38 +58,21 @@ const historyLoading = ref(false)
 const selected = ref<FlinkVersionView>()
 const versionWorking = ref(false)
 const historyError = ref('')
-const exporting = ref(false)
 const runsOpen = ref(false)
-const canRun = computed(() => projects.value.find(row => row.projectGroupId === project.value)
-  ?.capabilities.includes('task:schedule') ?? false)
 let historySequence = 0
 let selectionSequence = 0
 
 const canSave = computed(() => !!form.name.trim() && !!form.note.trim() && (!!editing.value || !!form.code.trim())
-  && (kind.value === 'JOB' ? !!form.sql.trim() && !!form.parallelism && form.functions.every(item => item.assetId && item.version)
-    : kind.value === 'JAR_JOB' ? !!form.jarId.trim() && !!form.entryClass.trim() && !!form.parallelism
+  && (kind.value === 'JAR_JOB' ? !!form.jarId.trim() && !!form.entryClass.trim() && !!form.parallelism
       : !!form.className.trim()))
-
-async function loadProjects() {
-  projectLoading.value = true
-  failed.value = ''
-  try {
-    projects.value = (await listMyProjectWorkspaces()).filter(row => row.capabilities.includes('task:develop'))
-    project.value = projects.value.find(row => row.primary)?.projectGroupId ?? projects.value[0]?.projectGroupId ?? ''
-  } catch {
-    failed.value = '无法加载项目，请刷新重试。'
-  } finally {
-    projectLoading.value = false
-  }
-}
 
 async function loadAssets() {
   const sequence = ++listSequence
-  if (!project.value) return
+  if (!project.value) { loading.value = false; return }
   loading.value = true
   failed.value = ''
   try {
-    const page = await listFlinkAssets(project.value, kind.value, current.value, size, keyword.value)
+    const page = await listFlinkAssets(project.value, kind.value, current.value, size, keyword.value, props.fixedMode ?? mode.value)
     if (sequence !== listSequence) return
     assets.value = page.records
     total.value = Number(page.total)
@@ -98,17 +86,18 @@ async function loadAssets() {
   }
 }
 
-watch([project, kind], () => {
+watch([project, kind, () => props.fixedMode], () => {
   assets.value = []
   total.value = 0
   current.value = 1
   keyword.value = ''
   nextKeyword.value = ''
+  mode.value = undefined
   editor.value = false
+  runningAsset.value = undefined
   closeHistory()
-  functionSequence++
   void loadAssets()
-})
+}, { immediate: true })
 
 function search() {
   current.value = 1
@@ -116,44 +105,29 @@ function search() {
   void loadAssets()
 }
 
-async function loadFunctions(phrase = '') {
-  const sequence = ++functionSequence
-  try {
-    const page = await listFlinkAssets(project.value, 'FUNCTION', 1, 50, phrase)
-    if (sequence !== functionSequence) return
-    const selectedIds = new Set(form.functions.map(item => item.assetId))
-    const keep = functionOptions.value.filter(row => selectedIds.has(row.id))
-    const byId = new Map([...keep, ...page.records].map(row => [row.id, row]))
-    functionOptions.value = [...byId.values()]
-  } catch {
-    if (sequence === functionSequence) formError.value = '无法加载函数列表，可重试搜索。'
-  }
-}
-
-function functionChanged(dependency: FunctionRef) {
-  dependency.version = functionOptions.value.find(row => row.id === dependency.assetId)?.currentVersion ?? 1
-}
-
 async function openEditor(row?: FlinkAsset) {
+  if (kind.value === 'JOB') {
+    void sqlWorkspace.value?.openAsset(row)
+    return
+  }
   const activeProject = project.value
   const activeKind = kind.value
+  const activeMode = props.fixedMode
   if (!activeProject) return
   try {
     const version = row ? await getFlinkVersion(activeProject, row.id, row.currentVersion) : undefined
-    if (activeProject !== project.value || activeKind !== kind.value) return
+    if (activeProject !== project.value || activeKind !== kind.value || activeMode !== props.fixedMode) return
     editing.value = version
     const def = version?.definition
     Object.assign(form, {
-      code: version?.code ?? '', name: version?.revision.name ?? '', note: '', mode: def?.mode ?? 'STREAMING',
-      parallelism: def?.parallelism ?? 1, sql: def?.sql ?? '', functions: def?.functions?.map(item => ({ ...item })) ?? [],
+      code: version?.code ?? '', name: version?.revision.name ?? '', note: '', mode: def?.mode ?? activeMode ?? 'STREAMING',
+      parallelism: def?.parallelism ?? 1,
       language: def?.language ?? 'JAVA', className: def?.className ?? '', jarUri: def?.jarUri ?? '',
       functionType: def?.functionType ?? (version ? '' : 'UDF'),
       jarId: def?.jarJob?.jarId ?? '', entryClass: def?.jarJob?.entryClass ?? '', arguments: [...(def?.jarJob?.arguments ?? [])],
     })
     formError.value = ''
-    functionOptions.value = []
     editor.value = true
-    if (kind.value === 'JOB') void loadFunctions()
   } catch {
     // The request layer displays the server error.
   }
@@ -161,12 +135,10 @@ async function openEditor(row?: FlinkAsset) {
 
 async function save() {
   if (saving.value || !canSave.value) return
-  const definition: FlinkDefinition = kind.value === 'JOB'
-    ? { sql: form.sql, mode: form.mode, parallelism: form.parallelism, functions: form.functions }
-    : kind.value === 'JAR_JOB'
-      ? { mode: form.mode, parallelism: form.parallelism,
+  const definition: FlinkDefinition = kind.value === 'JAR_JOB'
+    ? { mode: form.mode, parallelism: form.parallelism,
           jarJob: { jarId: form.jarId, entryClass: form.entryClass, arguments: [...form.arguments] } }
-      : { language: form.language, className: form.className, jarUri: form.jarUri || undefined,
+    : { language: form.language, className: form.className, jarUri: form.jarUri || undefined,
           functionType: form.functionType || undefined }
   const input = { name: form.name, note: form.note, definition }
   saving.value = true
@@ -186,6 +158,10 @@ async function save() {
 }
 
 async function openHistory(row: FlinkAsset) {
+  if (kind.value === 'JOB') {
+    void sqlWorkspace.value?.openAsset(row, 'history')
+    return
+  }
   viewedAsset.value = row
   selected.value = undefined
   runsOpen.value = false
@@ -266,58 +242,33 @@ async function restore() {
   }
 }
 
-async function download() {
-  const version = selected.value
-  if (!version) return
-  exporting.value = true
-  try {
-    const source = await exportFlinkSql(project.value, version.assetId, version.revision.version)
-    const url = URL.createObjectURL(new Blob([source], { type: 'text/plain;charset=utf-8' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${version.code}-v${version.revision.version}.sql`
-    link.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  } catch (e) {
-    historyError.value = e instanceof Error ? e.message : '导出失败'
-  } finally {
-    exporting.value = false
-  }
-}
-
 function time(value: string) {
   return value?.replace('T', ' ').slice(0, 19)
 }
 
-onMounted(() => void loadProjects())
 </script>
 
 <template>
   <div class="flink-studio">
-    <DkPageHeader title="Flink 开发" description="管理 SQL 作业、JAR 作业和函数版本。">
-      <template #actions>
-        <el-select v-model="project" aria-label="开发项目" placeholder="选择开发项目" :loading="projectLoading" class="project-select">
-          <el-option v-for="row in projects" :key="row.projectGroupId" :label="row.name" :value="row.projectGroupId" />
-        </el-select>
-      </template>
-    </DkPageHeader>
-
-    <el-alert v-if="failed" type="error" :title="failed" :closable="false" show-icon />
-    <el-empty v-if="!project && !projectLoading" description="暂无具备数据开发权限的项目">
-      <DkButton @click="loadProjects">刷新项目</DkButton>
-    </el-empty>
+    <DkPageHeader :title="title" :description="{
+      JOB: '编写 SQL、管理版本并提交运行。',
+      JAR_JOB: '管理程序包、入口类、启动参数和作业版本。',
+      FUNCTION: '登记 UDF、UDTF、UDAF，在作业中引用固定函数版本。',
+    }[kind]" />
+    <el-alert v-if="failed" type="error" :title="failed" :closable="false" show-icon>
+      <DkButton variant="quiet" @click="loadAssets">重试</DkButton>
+    </el-alert>
     <el-card v-if="project" shadow="never">
-      <el-tabs v-model="kind">
-        <el-tab-pane name="JOB" label="SQL 作业" />
-        <el-tab-pane name="JAR_JOB" label="JAR 作业" />
-        <el-tab-pane name="FUNCTION" label="函数库" />
-      </el-tabs>
       <div class="asset-tools">
         <form class="asset-search" @submit.prevent="search">
           <el-input v-model="nextKeyword" aria-label="搜索资产" placeholder="名称或编码" clearable @clear="search" />
+          <el-select v-if="kind !== 'FUNCTION' && !fixedMode" v-model="mode" clearable placeholder="全部运行模式"
+            aria-label="运行模式筛选" class="mode-filter" @change="search">
+            <el-option value="STREAMING" label="流式" /><el-option value="BATCH" label="批处理" />
+          </el-select>
           <DkButton type="submit">搜索</DkButton>
         </form>
-        <DkButton variant="primary" @click="openEditor()">{{ kind === 'FUNCTION' ? '登记函数' : '新建 ' + kindTitle[kind] }}</DkButton>
+        <DkButton variant="primary" @click="openEditor()">{{ kind === 'FUNCTION' ? '登记函数' : '新建 ' + title }}</DkButton>
       </div>
       <el-table v-loading="loading" :data="assets" row-key="id" :empty-text="'暂无' + kindTitle[kind]">
         <el-table-column prop="name" label="名称" min-width="160" />
@@ -330,10 +281,11 @@ onMounted(() => void loadProjects())
         </el-table-column>
         <el-table-column label="当前版本" width="90"><template #default="{ row }">v{{ row.currentVersion }}</template></el-table-column>
         <el-table-column label="更新时间" width="165"><template #default="{ row }">{{ time(row.updateTime) }}</template></el-table-column>
-        <el-table-column label="操作" width="135">
+        <el-table-column label="操作" :width="kind === 'FUNCTION' ? 135 : 205">
           <template #default="{ row }">
             <el-button link type="primary" @click="openEditor(row)">编辑</el-button>
             <el-button link type="primary" @click="openHistory(row)">历史版本</el-button>
+            <el-button v-if="kind !== 'FUNCTION'" link type="primary" @click="runningAsset = row">查看运行</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -341,7 +293,10 @@ onMounted(() => void loadProjects())
         layout="prev, pager, next" @current-change="loadAssets" />
     </el-card>
 
-    <el-dialog v-model="editor" :title="editing ? '编辑定义' : kind === 'FUNCTION' ? '登记 Flink 函数' : '新建 Flink ' + kindTitle[kind]"
+    <JobSqlWorkspace v-if="kind === 'JOB'" ref="sqlWorkspace" :project="project" :assets="assets" :fixed-mode="fixedMode"
+      :can-run="canRun" @saved="loadAssets" />
+
+    <el-dialog v-else v-model="editor" :title="editing ? '编辑定义' : kind === 'FUNCTION' ? '登记函数' : '新建 ' + title"
       width="min(850px, calc(100vw - 28px))" :show-close="!saving" :close-on-click-modal="false" :close-on-press-escape="!saving">
       <el-alert v-if="formError" type="error" :title="formError" :closable="false" show-icon />
       <el-form label-position="top" class="studio-form" @submit.prevent="save">
@@ -354,34 +309,17 @@ onMounted(() => void loadProjects())
         <template v-if="kind !== 'FUNCTION'">
           <div class="form-grid">
             <el-form-item label="运行模式">
-              <el-select v-model="form.mode" aria-label="运行模式">
+              <el-select v-model="form.mode" aria-label="运行模式" :disabled="!!fixedMode">
                 <el-option value="STREAMING" label="流式" /><el-option value="BATCH" label="批处理" />
               </el-select>
             </el-form-item>
             <el-form-item label="并行度"><el-input-number v-model="form.parallelism" aria-label="并行度" :min="1" :max="1024" /></el-form-item>
           </div>
         </template>
-        <template v-if="kind === 'JOB'">
-          <el-form-item label="Flink SQL">
-            <el-input v-model="form.sql" aria-label="Flink SQL" type="textarea" :rows="9" maxlength="131072" class="sql-input" />
-          </el-form-item>
-          <el-form-item label="函数版本">
-            <div v-for="(dep, i) in form.functions" :key="i" class="dependency">
-              <el-select v-model="dep.assetId" aria-label="依赖函数" placeholder="按名称或编码搜索" filterable remote
-                :remote-method="loadFunctions" @change="functionChanged(dep)">
-                <el-option v-for="row in functionOptions" :key="row.id" :value="row.id"
-                  :label="`${row.name} · ${row.code}（最新 v${row.currentVersion}）`" />
-              </el-select>
-              <el-input-number v-model="dep.version" aria-label="依赖版本号" :min="1" />
-              <el-button link type="danger" @click="form.functions.splice(i, 1)">移除</el-button>
-            </div>
-            <DkButton :disabled="form.functions.length >= 20" @click="form.functions.push({ assetId: '', version: 1 })">添加函数</DkButton>
-          </el-form-item>
-        </template>
-        <template v-else-if="kind === 'JAR_JOB'">
+        <template v-if="kind === 'JAR_JOB'">
           <el-form-item label="集群 JAR ID">
             <el-input v-model="form.jarId" aria-label="集群 JAR ID" maxlength="255"
-              placeholder="从已绑定 Flink 集群的 JAR 列表获取" />
+              placeholder="从项目运行环境的程序包列表获取" />
           </el-form-item>
           <el-form-item label="入口类">
             <el-input v-model="form.entryClass" aria-label="入口类" maxlength="255" placeholder="com.example.OrdersJob" />
@@ -415,6 +353,13 @@ onMounted(() => void loadProjects())
       </el-form>
     </el-dialog>
 
+    <el-dialog :model-value="!!runningAsset" :title="`运行记录 · ${runningAsset?.name ?? ''}`"
+      width="min(1000px, calc(100vw - 28px))" @update:model-value="$event === false && (runningAsset = undefined)">
+      <FlinkRunsPanel v-if="runningAsset" :key="runningAsset.id" :project="project" :asset-id="runningAsset.id"
+        :version="runningAsset.currentVersion" :can-run="canRun" :jar-job="kind === 'JAR_JOB'"
+        :streaming="runningAsset.currentMode === 'STREAMING'" />
+    </el-dialog>
+
     <el-dialog :model-value="!!viewedAsset" :title="`历史版本 · ${viewedAsset?.name ?? ''}`" width="min(850px, calc(100vw - 28px))"
       :close-on-click-modal="false" @update:model-value="$event === false && closeHistory()">
       <el-alert v-if="historyError" type="error" :title="historyError" :closable="false" show-icon />
@@ -436,7 +381,6 @@ onMounted(() => void loadProjects())
             <DkButton v-if="selected.kind !== 'FUNCTION'" :aria-expanded="runsOpen" @click="runsOpen = !runsOpen">
               {{ runsOpen ? '收起运行记录' : '运行与记录' }}
             </DkButton>
-            <DkButton v-if="selected.kind === 'JOB'" :loading="exporting" @click="download">下载 SQL</DkButton>
             <DkButton :loading="versionWorking" :disabled="selected.revision.version === selected.currentVersion" @click="restore">恢复为新版本</DkButton>
           </div>
         </div>
@@ -446,8 +390,7 @@ onMounted(() => void loadProjects())
           <ul v-if="selected.definition.functions?.length" aria-label="固定函数版本">
             <li v-for="dep in selected.definition.functions" :key="dep.assetId">{{ dep.assetId }} · v{{ dep.version }}</li>
           </ul>
-          <pre v-if="selected.kind === 'JOB'">{{ selected.definition.sql }}</pre>
-          <dl v-else-if="selected.definition.jarJob">
+          <dl v-if="selected.definition.jarJob">
             <dt>集群 JAR ID</dt><dd>{{ selected.definition.jarJob.jarId }}</dd>
             <dt>入口类</dt><dd>{{ selected.definition.jarJob.entryClass }}</dd>
             <dt>启动参数</dt><dd>{{ JSON.stringify(selected.definition.jarJob.arguments) }}</dd>
@@ -468,7 +411,6 @@ onMounted(() => void loadProjects())
 
 <style scoped>
 .flink-studio { display: grid; gap: var(--dk-space-4); min-width: 0; }
-.project-select { width: min(240px, 68vw); }
 .asset-tools, .asset-actions, .asset-search, .dependency {
   display: flex; align-items: center; flex-wrap: wrap; gap: var(--dk-space-2);
 }
@@ -476,11 +418,11 @@ onMounted(() => void loadProjects())
 .asset-search .el-input { width: min(210px, 58vw); }
 .studio-form { margin-top: var(--dk-space-3); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); column-gap: var(--dk-space-4); }
-.sql-input :deep(textarea), pre { font-family: var(--dk-mono, monospace); }
 .dependency { width: 100%; margin-bottom: var(--dk-space-2); }
 .dependency .el-select { flex: 1 1 180px; }
 .version-content { margin-top: var(--dk-space-4); overflow-wrap: anywhere; }
 .version-content h3 { margin: 0; }
 .version-content pre { padding: var(--dk-space-3); max-height: 300px; overflow: auto; background: var(--dk-soft); }
 .version-content dd { margin-left: 0; margin-bottom: var(--dk-space-2); }
+.mode-filter { width: 140px; }
 </style>

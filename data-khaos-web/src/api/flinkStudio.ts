@@ -62,8 +62,8 @@ const base = (project: string) => `/workflow/flink/projects/${encodeURIComponent
 const asset = (project: string, id: string) => `${base(project)}/${encodeURIComponent(id)}`
 const revision = (project: string, id: string, version: number) => `${asset(project, id)}/versions/${version}`
 
-export function listFlinkAssets(project: string, kind: FlinkAssetKind, current: number, size: number, keyword?: string) {
-  return get<PageResult<FlinkAsset>>(base(project), { kind, current, size, keyword: keyword || undefined })
+export function listFlinkAssets(project: string, kind: FlinkAssetKind, current: number, size: number, keyword?: string, mode?: FlinkMode) {
+  return get<PageResult<FlinkAsset>>(base(project), { kind, current, size, keyword: keyword || undefined, mode: mode || undefined })
 }
 
 export function createFlinkAsset(project: string, input: EditInput & { code: string; kind: FlinkAssetKind }) {
@@ -109,6 +109,25 @@ export interface FlinkRun {
 
 export function listFlinkRuns(project: string, id: string, current: number, size: number) {
   return get<{ enabled: boolean; page: PageResult<FlinkRun> }>(`${asset(project, id)}/runs`, { current, size })
+}
+
+export function validateFlinkSql(project: string, id: string, version: number) {
+  return post<{ version: number; mode: FlinkMode; statementCount: number }>(
+    `${revision(project, id, version)}/validate`, {})
+}
+
+export interface SqlSelectionPreview {
+  columns: string[]
+  rows: unknown[][]
+  truncated: boolean
+}
+
+export function validateFlinkDraft(project: string, definition: FlinkDefinition) {
+  return post<{ statementCount: number }>(`${base(project)}/debug/validate`, definition)
+}
+
+export function previewFlinkSelection(project: string, sql: string) {
+  return post<SqlSelectionPreview>(`${base(project)}/debug/selection`, { sql })
 }
 
 export function submitFlinkRun(project: string, id: string, version: number, requestId: string) {

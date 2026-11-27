@@ -1,0 +1,43 @@
+x-flink: &flink
+  image: flink:1.20.3-scala_2.12-java17
+  pull_policy: never
+  environment:
+    FLINK_PROPERTIES: |
+      jobmanager.rpc.address: jobmanager
+      rest.address: jobmanager
+      taskmanager.numberOfTaskSlots: 2
+      parallelism.default: 1
+      execution.target: remote
+      sql-gateway.endpoint.rest.address: 0.0.0.0
+      sql-gateway.endpoint.rest.port: 8083
+      execution.checkpointing.interval: 2 s
+      state.checkpoints.dir: file:///state/checkpoints
+      state.savepoints.dir: file:///state/savepoints
+  volumes:
+    - state:/state
+  depends_on:
+    state-init:
+      condition: service_completed_successfully
+services:
+  state-init:
+    image: flink:1.20.3-scala_2.12-java17
+    pull_policy: never
+    user: "0"
+    entrypoint: ["sh", "-ec", "mkdir -p /state/checkpoints /state/savepoints && chown -R flink:flink /state"]
+    volumes:
+      - state:/state
+  jobmanager:
+    <<: *flink
+    command: jobmanager
+    ports:
+      - "127.0.0.1::8081"
+  taskmanager:
+    <<: *flink
+    command: taskmanager
+  sql-gateway:
+    <<: *flink
+    command: ["bin/sql-gateway.sh", "start-foreground"]
+    ports:
+      - "127.0.0.1::8083"
+volumes:
+  state:

@@ -2,15 +2,15 @@
   <div class="editor" v-loading="saving">
     <!-- 顶部工具栏 -->
     <div class="topbar">
-      <el-button :icon="ArrowLeft" @click="router.back()">返回</el-button>
+      <el-button :icon="ArrowLeft" @click="backToList()">返回</el-button>
       <el-input v-model="def.name" placeholder="工作流名称" class="name-input" />
       <el-tag v-if="def.id" type="info">{{ def.code }}</el-tag>
       <div class="spacer" />
-      <el-radio-group v-model="def.status" size="default">
+      <el-radio-group v-model="def.status" size="default" :disabled="!canSchedule">
         <el-radio-button :value="1">启用</el-radio-button>
         <el-radio-button :value="0">禁用</el-radio-button>
       </el-radio-group>
-      <el-button type="primary" :icon="VideoPlay" :loading="running" @click="handleRun">运行</el-button>
+      <el-button type="primary" :icon="VideoPlay" :loading="running" :disabled="!canSchedule" @click="handleRun">运行</el-button>
       <el-button type="success" :icon="Check" :loading="saving" @click="handleSave">保存</el-button>
     </div>
 
@@ -97,7 +97,7 @@
             <template v-if="needDataSource(activeNode.nodeType)">
               <el-form-item label="数据源">
                 <el-select v-model="nodeDsId" filterable placeholder="选择数据源" style="width: 100%">
-                  <el-option v-for="ds in datasources" :key="ds.id" :label="`${ds.dsName} (${ds.dsType})`" :value="ds.id!" />
+                  <el-option v-for="ds in datasources" :key="ds.id" :label="ds.dsType ? `${ds.dsName} (${ds.dsType})` : ds.dsName" :value="ds.id!" />
                 </el-select>
               </el-form-item>
               <el-form-item :label="activeNode.nodeType === 'DATA_OP' ? '算子SQL' : 'SQL'">
@@ -148,7 +148,7 @@
               <el-input v-model="def.code" placeholder="留空自动生成" :disabled="!!def.id" />
             </el-form-item>
             <el-form-item label="Cron 表达式">
-              <el-input v-model="def.cronExpression" placeholder="如 0 0 2 * * ?（留空仅手动）" />
+              <el-input v-model="def.cronExpression" :disabled="!canSchedule" placeholder="如 0 0 2 * * ?（留空仅手动）" />
             </el-form-item>
             <el-form-item label="描述">
               <el-input v-model="def.description" type="textarea" :rows="3" placeholder="工作流描述" />
@@ -167,11 +167,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { realtimeProjectKey, projectLocation } from '@/views/realtime/projectContext'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Check, Close, VideoPlay } from '@element-plus/icons-vue'
 import { pageDatasources } from '@/api/datasource'
+import { listWorkspaceResources } from '@/api/project-group'
 import { getWorkflowGraph, saveWorkflowGraph, triggerWorkflow } from '@/api/workflow'
 import type { MetaDatasource, WorkflowDef, WorkflowEdge, WorkflowNode } from '@/types'
 
@@ -187,8 +189,15 @@ const typeList = [
   { type: 'DATA_OP', label: '数据算子', color: '#ff7d00' },
 ] as const
 
+const props = defineProps<{ inProjectWorkspace?: boolean }>()
+const workspace = inject(realtimeProjectKey, null)
+const canSchedule = computed(() => !props.inProjectWorkspace || !!workspace?.canRun.value)
 const route = useRoute()
 const router = useRouter()
+function backToList() {
+  if (props.inProjectWorkspace) void router.push(projectLocation('/jobs/offline', workspace?.project.value || ''))
+  else router.back()
+}
 
 const wrapRef = ref<HTMLElement>()
 const canvasRef = ref<HTMLElement>()
@@ -451,6 +460,10 @@ function onScroll() {}
 
 // 保存
 async function handleSave() {
+  if (saving.value) return
+  if (props.inProjectWorkspace && (!workspace?.project.value || def.projectId !== workspace.project.value)) {
+    return ElMessage.warning('工作流与当前项目不一致')
+  }
   if (!def.name) return ElMessage.warning('请填写工作流名称')
   if (nodes.value.length === 0) return ElMessage.warning('请至少添加一个节点')
   saving.value = true
@@ -490,6 +503,10 @@ async function load() {
   const id = route.params.id as string
   if (!id || id === 'create') {
     def.name = '新建工作流'
+    if (props.inProjectWorkspace) {
+      def.projectId = workspace?.project.value
+      def.status = 0
+    }
     if (nodes.value.length === 0) {
       addNode('SQL')
     }
@@ -497,6 +514,11 @@ async function load() {
   }
   try {
     const graph = await getWorkflowGraph(id)
+    if (props.inProjectWorkspace && graph.def.projectId !== workspace?.project.value) {
+      ElMessage.error('工作流与当前项目不一致')
+      backToList()
+      return
+    }
     Object.assign(def, graph.def)
     nodes.value = graph.nodes || []
     edges.value = graph.edges || []
@@ -517,12 +539,18 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
   try {
-    const data = await pageDatasources({ current: 1, size: 200 })
-    datasources.value = data.records
+    if (props.inProjectWorkspace && workspace?.project.value) {
+      const resources = await listWorkspaceResources(workspace.project.value)
+      datasources.value = resources.filter(row => row.resourceType === 'DATASOURCE' && row.available !== false)
+        .map(row => ({ id: row.resourceId, dsName: row.name || row.resourceId }))
+    } else {
+      const data = await pageDatasources({ current: 1, size: 200 })
+      datasources.value = data.records
+    }
   } catch {
     datasources.value = []
   }
-  load()
+  void load()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)

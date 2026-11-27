@@ -76,9 +76,13 @@ class Lab:
         script = (LAB / filename).read_text(encoding="utf-8")
         shared = (LAB / "paid-order-views.sql").read_text(encoding="utf-8")
         script = script.replace("-- INCLUDE paid-order-views.sql", shared.rstrip())
-        return self.compose("exec", "-T", "jobmanager", "sh", "-ec",
-                     """input=$(mktemp); trap 'rm -f "$input"' EXIT; cat > "$input"; /opt/flink/bin/sql-client.sh -f "$input" """,
-                     stdin=script, timeout=110)
+        output = self.compose("exec", "-T", "jobmanager", "sh", "-ec",
+                              """input=$(mktemp); trap 'rm -f "$input"' EXIT; cat > "$input"; /opt/flink/bin/sql-client.sh -f "$input" """,
+                              stdin=script, timeout=110)
+        if "[ERROR]" in output:
+            tail = "\n".join(output.splitlines()[-25:])
+            raise RuntimeError(f"{filename}: Flink SQL Client reported an error\n{tail}")
+        return output
 
     def reconcile_batch(self):
         self.mysql("""

@@ -1248,6 +1248,7 @@ export interface WorkflowRevision {
 
 export interface WorkflowDef {
   id?: string
+  projectId?: string
   name: string
   code?: string
   cronExpression?: string

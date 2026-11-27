@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { ArrowDown, Fold, Expand, Menu, Grid, Bell } from '@element-plus/icons-vue'
 import { buildWorkspaces, findWorkspace } from '@/modules/workspaces'
+import { CATEGORIES } from '@/modules/registry'
+import { projectLocation } from '@/views/realtime/projectContext'
 import { getUserPermission } from '@/api/permission'
 import { useModuleStore } from '@/stores/module'
 import { useUserStore } from '@/stores/user'
@@ -24,7 +26,14 @@ const workspaces = computed(() => buildWorkspaces(
   modules.loaded ? modules.systemCategory : { key: 'system', title: '系统管理', icon: 'Setting', features: [] },
   modules.canConfig,
 ))
-const workspace = computed(() => findWorkspace(workspaces.value, route.path))
+const workspace = computed(() => findWorkspace(workspaces.value, route.path,
+  !modules.loaded ? CATEGORIES.find(category => category.key === 'dev')?.features : undefined))
+const returnToPortal = computed(() => workspace.value.key === 'realtime' || route.path.startsWith('/jobs'))
+function linkLocation(path: string) {
+  const project = route.query.project
+  return typeof project === 'string' && (path === '/jobs' || path.startsWith('/jobs/')
+    || path.startsWith('/realtime/') || path === '/project-workspace') ? projectLocation(path, project) : path
+}
 const portalHome = computed(() => route.name === 'Dashboard')
 const sidebarLabel = computed(() => sidebarCollapsed.value ? '展开侧栏' : '收起侧栏')
 
@@ -43,6 +52,7 @@ function isActive(path: string, match?: string) {
     const target = router.resolve(path)
     return target.path === route.path && target.query.mode === route.query.mode
   }
+  if (path === '/jobs/offline' && (route.path === '/workflow/list' || route.path.startsWith('/workflow/edit/'))) return true
   return path === route.path || Boolean(match && route.path.startsWith(match))
 }
 
@@ -87,7 +97,7 @@ async function logout() {
             </button>
           </h2>
           <div :id="`workspace-menu-${index}`" v-show="!isFolded(section.title)">
-            <RouterLink v-for="link in section.links" :key="link.path" :to="link.path"
+            <RouterLink v-for="link in section.links" :key="link.path" :to="linkLocation(link.path)"
               :class="{ current: isActive(link.path, link.match) }" @click="menuOpen = false">
               <component :is="link.icon" class="nav-icon" aria-hidden="true" />{{ link.title }}
             </RouterLink>
@@ -103,7 +113,9 @@ async function logout() {
           <span class="brand-icon"><Grid aria-hidden="true" /></span>
           <span>产品服务</span><ArrowDown class="portal-chevron" aria-hidden="true" />
         </button>
-        <RouterLink to="/dashboard" class="portal-brand">Data Khaos</RouterLink>
+        <RouterLink to="/dashboard" class="portal-brand" :aria-label="returnToPortal ? '返回数据门户' : '数据门户'">
+          {{ returnToPortal ? '返回门户' : 'Data Khaos' }}
+        </RouterLink>
         <button v-if="!portalHome" class="sidebar-toggle" type="button" :aria-label="sidebarLabel" :title="sidebarLabel"
           aria-controls="platform-navigation" :aria-expanded="!sidebarCollapsed" @click="sidebarCollapsed = !sidebarCollapsed">
           <component :is="sidebarCollapsed ? Expand : Fold" aria-hidden="true" />
@@ -126,7 +138,7 @@ async function logout() {
     <NotificationInbox v-if="inboxOpen" @close="inboxOpen = false" />
     <ProductDirectory v-model="directoryOpen" :workspaces="workspaces" :current="workspace.key" />
     <div class="workspace">
-      <main id="main-content" class="workspace-content" :class="{ workbench: route.path === '/query/onesql' || portalHome }" tabindex="-1"><RouterView /></main>
+      <main id="main-content" class="workspace-content" :class="{ workbench: route.path === '/query/onesql' || route.name === 'JobOneSql' || portalHome }" tabindex="-1"><RouterView /></main>
     </div>
   </div>
 </template>

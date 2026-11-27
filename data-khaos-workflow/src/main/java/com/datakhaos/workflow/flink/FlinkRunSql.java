@@ -22,6 +22,32 @@ public record FlinkRunSql(List<String> setup, String insert) {
             throw invalid("运行脚本最多 30 条语句，最后一条须为 INSERT INTO");
         }
         List<String> setup = statements.subList(0, statements.size() - 1);
+        validateSetup(setup);
+        return new FlinkRunSql(List.copyOf(setup), statements.get(statements.size() - 1));
+    }
+
+    public static Selection parseSelection(String script) {
+        if (script == null || script.isBlank() || script.length() > 131072) {
+            throw invalid("请选择有效的 SQL，最多 131072 个字符");
+        }
+        List<String> statements = split(script);
+        if (statements.isEmpty() || statements.size() > 30) {
+            throw invalid("选中调试最多支持 30 条语句");
+        }
+        String query = statements.get(statements.size() - 1);
+        if (!query.matches("(?is)^SELECT\\s+.+$")) {
+            throw invalid("请选择完整的只读 SELECT，可同时选中前置临时表或视图");
+        }
+        List<String> setup = statements.subList(0, statements.size() - 1);
+        for (String statement : setup) {
+            if (!TEMPORARY.matcher(statement).matches() || statement.matches("(?is)^CREATE\\s+TEMPORARY\\s+FUNCTION\\s+.+$")) {
+                throw invalid("选中调试的前置语句仅支持创建临时表或视图");
+            }
+        }
+        return new Selection(List.copyOf(setup), query);
+    }
+
+    private static void validateSetup(List<String> setup) {
         Set<String> settings = new HashSet<>();
         for (String statement : setup) {
             if (TEMPORARY.matcher(statement).matches()) continue;
@@ -30,8 +56,9 @@ public record FlinkRunSql(List<String> setup, String insert) {
                 throw invalid("准备语句仅支持临时表、视图、函数及单次设置的受支持 SET");
             }
         }
-        return new FlinkRunSql(List.copyOf(setup), statements.get(statements.size() - 1));
     }
+
+    public record Selection(List<String> setup, String query) {}
 
     private static List<String> split(String script) {
         List<String> statements = new ArrayList<>();
