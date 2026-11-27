@@ -1,6 +1,7 @@
 package com.datakhaos.approval.controller;
 
 import cn.hutool.core.util.StrUtil;
+import com.datakhaos.approval.api.model.ApprovalEvidenceDto;
 import com.datakhaos.approval.dto.ApplyRequest;
 import com.datakhaos.approval.dto.ApprovalActionRequest;
 import com.datakhaos.approval.dto.TransferRequest;
@@ -102,6 +103,15 @@ public class ApprovalController {
     @GetMapping("/flow/list")
     public R<List<AppApprovalFlow>> flows() {
         return R.ok(approvalService.flows());
+    }
+
+    /** 按目标版本查询已通过的审批；查不到返回 null，调用方必须按「未批准」处理。 */
+    @Operation(summary = "查询目标版本已通过的审批")
+    @GetMapping("/apply/approved")
+    public R<ApprovalEvidenceDto> approved(@RequestParam String applyType,
+                                           @RequestParam String targetId,
+                                           @RequestParam(required = false) Integer targetRevision) {
+        return R.ok(approvalService.findApproved(applyType, targetId, targetRevision));
     }
 
     /** 优先取请求上下文用户；直接调用时回退到参数 */

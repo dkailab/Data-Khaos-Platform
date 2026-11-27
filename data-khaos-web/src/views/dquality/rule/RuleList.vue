@@ -98,9 +98,18 @@
         <el-form-item v-if="form.ruleType === 'CUSTOM_SQL' || form.ruleType === 'CUSTOM_PROBE'" label="自定义SQL" prop="customSql">
           <el-input v-model="customSql" type="textarea" :rows="4" placeholder="请输入稽核 SQL（仅允许 SELECT）" />
         </el-form-item>
+        <el-form-item v-if="form.ruleType === 'PIPELINE_COUNT'" label="阶段采样SQL">
+          <el-input v-model="metricsSql" type="textarea" :rows="4"
+            placeholder="SELECT stage, records_in, records_out FROM dk_pipeline_stage_count WHERE job_id = '${jobId}' ORDER BY stage_order" />
+          <span class="hint">须返回 stage / records_in / records_out；有 stage_order 时按其排序。相邻阶段「上游输出 - 下游输入」计入计数偏差</span>
+        </el-form-item>
+        <el-form-item v-if="form.ruleType === 'PIPELINE_COUNT'" label="Flink 作业ID">
+          <el-input v-model="metricsJobId" placeholder="可选，替换采样 SQL 中的 ${jobId}" />
+          <span class="hint">留空时采样 SQL 不能包含 ${jobId} 占位，例如按全局最新批次对账</span>
+        </el-form-item>
         <el-form-item label="告警阈值" prop="alertThreshold">
           <el-input-number v-model="form.alertThreshold" :precision="4" :step="0.01" :min="0" style="width: 200px" />
-          <span class="hint">空值率/违规率超过该值即告警</span>
+          <span class="hint">空值率/违规率/管道计数偏差率超过该值即告警</span>
         </el-form-item>
         <el-form-item label="权重" prop="weight">
           <el-input-number v-model="form.weight" :min="1" :max="100" style="width: 200px" />
@@ -146,6 +155,8 @@ const formRef = ref<FormInstance>()
 const isEdit = ref(false)
 const form = reactive<any>({ ruleType: 'NOT_NULL', weight: 1, alertThreshold: 0, status: 1 })
 const customSql = ref('')
+const metricsSql = ref('')
+const metricsJobId = ref('')
 const minValue = ref<number | undefined>()
 const maxValue = ref<number | undefined>()
 
@@ -236,6 +247,8 @@ function openCreate() {
   isEdit.value = false
   Object.assign(form, { ruleName: '', ruleCode: '', ruleType: 'NOT_NULL', datasourceId: '', databaseName: '', tableName: '', columnName: '', weight: 1, alertThreshold: 0, status: 1 })
   customSql.value = ''
+  metricsSql.value = ''
+  metricsJobId.value = ''
   minValue.value = undefined
   maxValue.value = undefined
   dbOptions.value = []
@@ -249,12 +262,16 @@ function openEdit(row: DqRule) {
   Object.assign(form, { ...row })
   // 解析配置 JSON
   customSql.value = ''
+  metricsSql.value = ''
+  metricsJobId.value = ''
   minValue.value = undefined
   maxValue.value = undefined
   if (row.ruleConfig) {
     try {
       const cfg = JSON.parse(row.ruleConfig)
       customSql.value = cfg.customSql || ''
+      metricsSql.value = cfg.metricsSql || ''
+      metricsJobId.value = cfg.jobId || ''
       minValue.value = cfg.min
       maxValue.value = cfg.max
     } catch {
@@ -282,6 +299,14 @@ function openEdit(row: DqRule) {
 
 async function submit() {
   await formRef.value?.validate()
+  if (form.ruleType === 'PIPELINE_COUNT' && !metricsSql.value.trim()) {
+    ElMessage.warning('管道阶段计数规则需要填写阶段采样 SQL')
+    return
+  }
+  if (form.ruleType === 'PIPELINE_COUNT' && metricsSql.value.includes('${jobId}') && !metricsJobId.value.trim()) {
+    ElMessage.warning('采样 SQL 使用了 ${jobId} 占位，请填写 Flink 作业ID')
+    return
+  }
   // 组装 ruleConfig
   const cfg: Record<string, any> = {}
   if (form.ruleType === 'VALUE_RANGE') {
@@ -290,6 +315,10 @@ async function submit() {
   }
   if (form.ruleType === 'CUSTOM_SQL' || form.ruleType === 'CUSTOM_PROBE') {
     cfg.customSql = customSql.value
+  }
+  if (form.ruleType === 'PIPELINE_COUNT') {
+    cfg.metricsSql = metricsSql.value
+    if (metricsJobId.value.trim()) cfg.jobId = metricsJobId.value.trim()
   }
   submitting.value = true
   try {

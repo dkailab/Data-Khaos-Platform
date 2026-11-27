@@ -29,7 +29,10 @@ public class DqRuleResultDto implements Serializable {
     /** 0失败 1通过 */
     private Integer passed;
 
-    /** 实际值（如空值率） */
+    /** 错误码：NO_PERMISSION / RULE_SQL_FAILED / RULE_ERROR，正常执行为 null */
+    private String errorCode;
+
+    /** 实际值（如空值率、丢失率） */
     private BigDecimal actualValue;
 
     /** 阈值 */

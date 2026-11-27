@@ -60,10 +60,16 @@
             <el-option label="数据源" value="DATASOURCE" />
             <el-option label="菜单" value="MENU" />
             <el-option label="模型订阅" value="MART" />
+            <el-option label="数仓 API 版本" value="WAREHOUSE_API" />
+            <el-option label="实时作业版本" value="FLINK_JOB" />
           </el-select>
         </el-form-item>
         <el-form-item label="目标ID" prop="targetId">
           <el-input v-model="applyForm.targetId" placeholder="目标ID（TABLE 时为数据源ID）" />
+        </el-form-item>
+        <el-form-item v-if="needsRevision" label="目标版本">
+          <el-input-number v-model="applyForm.targetRevision" :min="1" />
+          <span class="hint">审批只对这一版有效，改稿后需重新申请</span>
         </el-form-item>
         <el-form-item label="目标名称" prop="targetName">
           <el-input v-model="applyForm.targetName" placeholder="目标名称（TABLE 时为 database.table）" />
@@ -87,6 +93,9 @@
         </el-descriptions-item>
         <el-descriptions-item label="目标名称">{{ detail.apply?.targetName }}</el-descriptions-item>
         <el-descriptions-item label="目标ID">{{ detail.apply?.targetId }}</el-descriptions-item>
+        <el-descriptions-item v-if="detail.apply?.targetRevision" label="目标版本" :span="2">
+          v{{ detail.apply?.targetRevision }}
+        </el-descriptions-item>
         <el-descriptions-item label="申请理由" :span="2">{{ detail.apply?.reason }}</el-descriptions-item>
         <el-descriptions-item label="申请时间" :span="2">{{ detail.apply?.createTime }}</el-descriptions-item>
       </el-descriptions>
@@ -106,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
@@ -122,6 +131,7 @@ const query = reactive<Record<string, any>>({ current: 1, size: 10, status: unde
 const applyVisible = ref(false)
 const applyFormRef = ref<FormInstance>()
 const applyForm = reactive<ApplyRequest>({ applyType: 'TABLE' })
+const needsRevision = computed(() => ['WAREHOUSE_API', 'FLINK_JOB'].includes(applyForm.applyType))
 const applyRules: FormRules = {
   applyType: [{ required: true, message: '请选择申请类型', trigger: 'change' }],
   targetName: [{ required: true, message: '请输入目标名称', trigger: 'blur' }],
@@ -131,7 +141,8 @@ const detailVisible = ref(false)
 const detail = ref<{ apply: AppApply; records: AppApprovalRecord[] }>({ apply: {}, records: [] })
 
 function applyTypeText(t?: string) {
-  return { TABLE: '表权限', REPORT: '报表', DATASOURCE: '数据源', MENU: '菜单', MART: '模型订阅' }[t ?? ''] ?? t ?? '-'
+  return { TABLE: '表权限', REPORT: '报表', DATASOURCE: '数据源', MENU: '菜单', MART: '模型订阅',
+    WAREHOUSE_API: '数仓 API 版本', FLINK_JOB: '实时作业版本' }[t ?? ''] ?? t ?? '-'
 }
 
 function statusText(s?: number) {
@@ -172,7 +183,7 @@ function handleSearch() {
 }
 
 function openApply() {
-  Object.assign(applyForm, { applyType: 'TABLE', targetId: '', targetName: '', reason: '' })
+  Object.assign(applyForm, { applyType: 'TABLE', targetId: '', targetRevision: undefined, targetName: '', reason: '' })
   applyVisible.value = true
 }
 
@@ -205,6 +216,7 @@ onMounted(load)
 </script>
 
 <style scoped>
+.hint { margin-left: 8px; color: var(--dk-muted); font-size: 12px; }
 .toolbar {
   display: flex;
   justify-content: space-between;

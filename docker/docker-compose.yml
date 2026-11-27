@@ -224,6 +224,10 @@ services:
         MODULE: data-khaos-query
     container_name: dk-query
     # 查询接口通过网关访问，用户身份由网关透传。
+    environment:
+      <<: *app-env
+      # 发布审批门禁：true 时发布必须存在绑定当前 revision 的已通过审批；默认关闭保持存量流程
+      DATA_KHAOS_WAREHOUSE_APPROVAL_REQUIRED: "false"
 
   # ---------- 可视化引擎 ----------
   visual:

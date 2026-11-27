@@ -193,14 +193,16 @@ CREATE TABLE IF NOT EXISTS sg_project_group_resource (
 CREATE TABLE IF NOT EXISTS app_apply (
     id               VARCHAR(32) NOT NULL PRIMARY KEY COMMENT '主键ID',
     applicant_id     VARCHAR(32) NOT NULL COMMENT '申请人ID',
-    apply_type       VARCHAR(50) NOT NULL COMMENT '类型 TABLE/REPORT/DATASOURCE/MENU',
-    target_id        VARCHAR(32) COMMENT '申请目标ID',
+    apply_type       VARCHAR(50) NOT NULL COMMENT '类型 TABLE/REPORT/DATASOURCE/MENU/WAREHOUSE_API/FLINK_JOB',
+    target_id        VARCHAR(64) COMMENT '申请目标ID',
+    target_revision  INT COMMENT '目标修订号，审批绑定到具体版本',
     target_name      VARCHAR(200) COMMENT '申请目标名称',
     reason           VARCHAR(1000) COMMENT '申请理由',
     status           TINYINT DEFAULT 0 COMMENT '状态 0:待审批 1:通过 2:驳回 3:已撤销',
     current_approver VARCHAR(32) COMMENT '当前审批人',
     create_time      DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    update_time      DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间'
+    update_time      DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间',
+    KEY idx_app_apply_target (apply_type, target_id, target_revision, status)
 ) ENGINE=InnoDB COMMENT='权限申请表';
 
 CREATE TABLE IF NOT EXISTS app_approval_record (
@@ -592,6 +594,30 @@ CREATE TABLE IF NOT EXISTS query_history (
     error_message  VARCHAR(1000) COMMENT '错误信息',
     create_time    DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
 ) ENGINE=InnoDB COMMENT='查询历史表';
+
+-- 异步查询作业：大结果集后台执行，前端按 jobId 轮询（与 db/init.sql 的 query_job 对齐）
+CREATE TABLE IF NOT EXISTS query_job (
+    id               VARCHAR(32) NOT NULL PRIMARY KEY COMMENT '主键ID',
+    user_id          VARCHAR(32) NOT NULL COMMENT '提交用户',
+    request_id       VARCHAR(36) NOT NULL COMMENT '幂等请求ID',
+    datasource_id    VARCHAR(32) NOT NULL COMMENT '数据源ID',
+    database_name    VARCHAR(200) COMMENT '数据库',
+    sql_text         LONGTEXT NOT NULL COMMENT 'SQL文本',
+    status           VARCHAR(20) NOT NULL COMMENT 'PENDING/RUNNING/SUCCESS/FAILED/CANCELED',
+    create_time      DATETIME NOT NULL COMMENT '创建时间',
+    start_time       DATETIME COMMENT '开始时间',
+    end_time         DATETIME COMMENT '结束时间',
+    result_expires_at DATETIME COMMENT '结果过期时间',
+    row_count        INT COMMENT '结果行数',
+    error_message    VARCHAR(500) COMMENT '错误信息',
+    result_json      LONGTEXT COMMENT '结果快照JSON',
+    UNIQUE KEY uk_query_job_request (user_id, request_id),
+    KEY idx_query_job_owner (user_id, create_time, id),
+    KEY idx_query_job_queue (status, create_time, id),
+    KEY idx_query_job_started (status, start_time),
+    KEY idx_query_job_end (end_time),
+    KEY idx_query_job_expiry (result_expires_at)
+) ENGINE=InnoDB COMMENT='异步查询作业表';
 
 -- ============================================================
 -- 8. 可视化表

@@ -2,6 +2,8 @@ package com.datakhaos.query.service;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.MybatisSqlSessionFactoryBuilder;
+import com.datakhaos.approval.api.model.ApprovalEvidenceDto;
+import com.datakhaos.approval.api.service.ApprovalApiClient;
 import com.datakhaos.common.config.MybatisPlusConfig;
 import com.datakhaos.common.exception.GlobalExceptionHandler;
 import com.datakhaos.common.model.ResultCode;
@@ -39,6 +41,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -65,17 +68,18 @@ class WarehouseApiLifecycleTest {
         }
 
         @Override
-        List<RegionSample> readRegions(Table table, LocalDate date, int limit) {
+        List<RegionSample> readRegions(Table table, Contract contract, LocalDate date, int limit) {
             return List.of(new RegionSample("east", "100.00", 2, "2026-11-17T00:05:12.345"));
         }
 
         @Override
-        EventProgress readEventProgress(Table table, LocalDate date) {
+        EventProgress readEventProgress(Table table, Contract contract, LocalDate date) {
             return new EventProgress("2026-11-17T00:05:13.000", 3, "2026-11-17T00:02:02.000");
         }
     };
     private Connection keepAlive;
     private MockMvc mvc;
+    private WarehouseApiService apis;
     private boolean issuerActive = true;
     private String executionUser;
 
@@ -124,6 +128,7 @@ class WarehouseApiLifecycleTest {
             }
         };
         var apis = new WarehouseApiService(mapper, permissions, materializations, realtime);
+        this.apis = apis;
         var appService = new WarehouseApiAppService(
                 session.getMapper(WarehouseApiAppMapper.class),
                 session.getMapper(WarehouseApiGrantMapper.class),
@@ -176,6 +181,48 @@ class WarehouseApiLifecycleTest {
         var list = call(get(ADMIN).param("size", "1"), "developer", ResultCode.SUCCESS);
         assertEquals(2, list.path("total").asInt());
         assertEquals(2, list.path("records").get(0).path("apiVersion").asInt());
+    }
+
+    /**
+     * 开启发布审批后：无审批拒绝发布；审批只对当时修订号有效，改稿后必须重新审批。
+     */
+    @Test
+    void publishGateRequiresApprovalForTheCurrentRevision() throws Exception {
+        String v1 = ADMIN + VERSION + "1";
+        call(draft(post(v1), 25), "developer", ResultCode.SUCCESS);
+
+        apis.configureApprovalGate(true, new ApprovalApiClient(null) {
+            @Override
+            public Optional<ApprovalEvidenceDto> findApproved(String applyType, String targetId, Integer revision) {
+                assertEquals("WAREHOUSE_API", applyType);
+                return Optional.empty();
+            }
+        });
+        call(post(v1 + "/publish").param("revision", "1"), "developer", ResultCode.FORBIDDEN);
+
+        // 只批准 revision=1：改稿推进到 2 后，旧审批不再生效
+        apis.configureApprovalGate(true, new ApprovalApiClient(null) {
+            @Override
+            public Optional<ApprovalEvidenceDto> findApproved(String applyType, String targetId, Integer revision) {
+                return Integer.valueOf(1).equals(revision)
+                        ? Optional.of(new ApprovalEvidenceDto("apply-1", applyType, targetId, revision,
+                                "developer", "boss", null, "同意"))
+                        : Optional.empty();
+            }
+        });
+        call(draft(put(v1).param("revision", "1"), 30), "developer", ResultCode.SUCCESS);
+        call(post(v1 + "/publish").param("revision", "2"), "developer", ResultCode.FORBIDDEN);
+
+        // 新版本重新审批后可发布
+        apis.configureApprovalGate(true, new ApprovalApiClient(null) {
+            @Override
+            public Optional<ApprovalEvidenceDto> findApproved(String applyType, String targetId, Integer revision) {
+                return Optional.of(new ApprovalEvidenceDto("apply-2", applyType, targetId, revision,
+                        "developer", "boss", null, "同意"));
+            }
+        });
+        assertEquals("PUBLISHED", call(post(v1 + "/publish").param("revision", "2"),
+                "developer", ResultCode.SUCCESS).path("status").asText());
     }
 
     @Test

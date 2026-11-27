@@ -3,6 +3,7 @@ package com.datakhaos.workflow.service;
 import com.datakhaos.common.exception.BusinessException;
 import com.datakhaos.common.model.R;
 import com.datakhaos.common.model.ResultCode;
+import com.datakhaos.common.security.MetadataHolder;
 import com.datakhaos.permission.api.model.ProjectWorkspaceDto;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.ObjectProvider;
@@ -39,6 +40,11 @@ public class WorkflowProjectAccess {
         HttpServletRequest request = requests.getIfAvailable();
         String authorization = request == null ? null : request.getHeader(HttpHeaders.AUTHORIZATION);
         if (authorization == null || authorization.isBlank()) {
+            // 内部系统调用（调度触发实时作业）没有用户 JWT，以超级管理员身份直连；
+            // 网关进来的请求始终携带 Authorization，仍走完整项目权限校验。
+            if (MetadataHolder.isSuperAdmin()) {
+                return;
+            }
             throw new BusinessException(ResultCode.UNAUTHORIZED);
         }
         String selected = request.getHeader("X-Project-Group-Id");

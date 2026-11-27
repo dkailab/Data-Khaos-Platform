@@ -69,6 +69,10 @@
             <artifactId>data-khaos-permission-api</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.datakhaos</groupId>
+            <artifactId>data-khaos-approval-api</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>

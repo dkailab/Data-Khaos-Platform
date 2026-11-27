@@ -60,6 +60,10 @@
             <groupId>com.datakhaos</groupId>
             <artifactId>data-khaos-pipeline-api</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.datakhaos</groupId>
+            <artifactId>data-khaos-approval-api</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

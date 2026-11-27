@@ -37,6 +37,30 @@ ALTER TABLE warehouse_api_version ADD COLUMN freshness_stale_seconds INT NOT NUL
 -- 默认 0 表示关闭，存量版本行为完全不变；仅 REALTIME 版本可配置为大于 0（上限 3600）。
 ALTER TABLE warehouse_api_version ADD COLUMN quiet_seconds INT NOT NULL DEFAULT 0;
 
+-- 批流对账容差（0~1）：NULL/0 表示 STRICT 逐地区精确匹配；如 0.05 表示金额与订单数相对偏差不超过 5% 判 WITHIN_TOLERANCE。
+-- 仅 REALTIME 版本可配置；任一侧截断或未定稿时两种模式都不判一致。
+ALTER TABLE warehouse_api_version ADD COLUMN reconcile_tolerance DECIMAL(5,4) NULL DEFAULT NULL;
+
+-- ------------------------------------------------------------------
+-- 实时契约通用化：列映射与推进信号表
+--
+-- 全部为 NULL 时按默认「地区成交额」口径解释，存量版本行为完全不变：
+--   key=region / value=gmv_cents / count=paid_order_count / observed=observed_at
+--   金额除以 realtime_value_divisor 换算为元；推进表默认为 <结果表>_events。
+-- 配置后同一响应契约可服务非地区成交额的实时 ADS，无需改 Java 代码。
+-- ------------------------------------------------------------------
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_key_column VARCHAR(64) NULL;
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_value_column VARCHAR(64) NULL;
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_count_column VARCHAR(64) NULL;
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_observed_column VARCHAR(64) NULL;
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_date_column VARCHAR(64) NULL;
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_value_divisor INT NULL;
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_progress_table VARCHAR(64) NULL;
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_progress_date_column VARCHAR(64) NULL;
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_progress_advanced_column VARCHAR(64) NULL;
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_progress_count_column VARCHAR(64) NULL;
+ALTER TABLE warehouse_api_version ADD COLUMN realtime_progress_event_time_column VARCHAR(64) NULL;
+
 -- 调用审计补时效快照：事后可复核「当时返回的是哪种时效」
 ALTER TABLE warehouse_api_call_audit ADD COLUMN freshness VARCHAR(16) NULL;
 
@@ -44,5 +68,11 @@ ALTER TABLE warehouse_api_call_audit ADD COLUMN freshness VARCHAR(16) NULL;
 -- ALTER TABLE warehouse_api_version
 --     DROP COLUMN data_mode, DROP COLUMN realtime_asset_id, DROP COLUMN realtime_batch_asset_id,
 --     DROP COLUMN observed_timezone, DROP COLUMN amount_unit,
---     DROP COLUMN freshness_fresh_seconds, DROP COLUMN freshness_stale_seconds, DROP COLUMN quiet_seconds;
+--     DROP COLUMN freshness_fresh_seconds, DROP COLUMN freshness_stale_seconds, DROP COLUMN quiet_seconds,
+--     DROP COLUMN reconcile_tolerance,
+--     DROP COLUMN realtime_key_column, DROP COLUMN realtime_value_column, DROP COLUMN realtime_count_column,
+--     DROP COLUMN realtime_observed_column, DROP COLUMN realtime_date_column, DROP COLUMN realtime_value_divisor,
+--     DROP COLUMN realtime_progress_table, DROP COLUMN realtime_progress_date_column,
+--     DROP COLUMN realtime_progress_advanced_column,
+--     DROP COLUMN realtime_progress_count_column, DROP COLUMN realtime_progress_event_time_column;
 -- ALTER TABLE warehouse_api_call_audit DROP COLUMN freshness;

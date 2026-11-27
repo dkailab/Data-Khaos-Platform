@@ -26,12 +26,13 @@ import java.util.Map;
 /**
  * 质量稽核引擎：根据规则模板生成并执行稽核 SQL，计算结果。
  *
- * 支持 5 种模板：
+ * 支持 6 种模板：
  * 1. NOT_NULL - 统计某字段空值率 → 空值率 > 阈值则失败
  * 2. UNIQUE - 统计重复组数量 → 存在重复则失败
  * 3. VALUE_RANGE - 统计越界行数 → 越界率 > 阈值则失败
  * 4. CUSTOM_SQL - 用户提供返回"违规行"的 SQL → 行数 > 0 则失败
  * 5. CUSTOM_PROBE - 用户提供统计 SQL，取第一行第一列 → 值 > 阈值则失败
+ * 6. PIPELINE_COUNT - 阶段计数对账：相邻阶段「上游输出 - 下游输入」的丢失率 > 阈值则失败
  */
 @Slf4j
 @Component
@@ -48,6 +49,8 @@ public class QualityEngine {
     public static final String TYPE_VALUE_RANGE = "VALUE_RANGE";
     public static final String TYPE_CUSTOM_SQL = "CUSTOM_SQL";
     public static final String TYPE_CUSTOM_PROBE = "CUSTOM_PROBE";
+    /** 管道阶段计数对账：采样 SQL 须返回 stage / records_in / records_out 三列。 */
+    public static final String TYPE_PIPELINE_COUNT = "PIPELINE_COUNT";
 
     /** 规则执行异常码：无目标表权限 */
     public static final String ERR_NO_PERMISSION = "NO_PERMISSION";
@@ -202,6 +205,14 @@ public class QualityEngine {
                 }
                 yield SqlAuditUtil.audit(replaceBizDate(customSql, bizDate));
             }
+            case TYPE_PIPELINE_COUNT -> {
+                Map<String, Object> cfg = parseConfig(config);
+                String metricsSql = (String) cfg.get("metricsSql");
+                if (StrUtil.isBlank(metricsSql)) {
+                    throw new BusinessException("阶段计数采样 SQL 不能为空");
+                }
+                yield SqlAuditUtil.audit(replaceBizDate(replaceJobId(metricsSql, cfg), bizDate));
+            }
             default -> throw new BusinessException("不支持的规则类型: " + type);
         };
     }
@@ -232,6 +243,25 @@ public class QualityEngine {
             throw new BusinessException("业务日期格式非法（应为 YYYY-MM-DD）: " + bizDate);
         }
         return sql.replace("${bizDate}", bizDate);
+    }
+
+    /**
+     * 管道采样 SQL 的 ${jobId} 占位替换，取自 rule_config.jobId。
+     * 只允许作业 ID 字符集，避免把配置值直接拼进 SQL 造成注入。
+     */
+    private String replaceJobId(String sql, Map<String, Object> cfg) {
+        if (!sql.contains("${jobId}")) {
+            return sql;
+        }
+        Object configured = cfg.get("jobId");
+        String jobId = configured == null ? null : String.valueOf(configured).strip();
+        if (StrUtil.isBlank(jobId)) {
+            throw new BusinessException("采样 SQL 包含 ${jobId} 占位，但规则未配置 jobId");
+        }
+        if (!jobId.matches("[0-9a-zA-Z_-]{1,64}")) {
+            throw new BusinessException("规则配置的 jobId 非法");
+        }
+        return sql.replace("${jobId}", jobId);
     }
 
     private String buildNotNullSql(String db, String table, String col, String dateFilter) {
@@ -273,6 +303,14 @@ public class QualityEngine {
         List<Map<String, Object>> rows = qr.getRows();
 
         if (rows == null || rows.isEmpty()) {
+            if (TYPE_PIPELINE_COUNT.equals(type)) {
+                // 采样点缺失不等于「没有丢数」，必须报错而不能默认通过。
+                result.setPassed(0);
+                result.setActualValue(BigDecimal.ONE);
+                result.setErrorCode(ERR_RULE_ERROR);
+                result.setMessage("无阶段计数采样点，无法完成管道对账");
+                return;
+            }
             result.setPassed(1);
             result.setActualValue(BigDecimal.ZERO);
             result.setMessage("无数据，默认通过");
@@ -345,8 +383,125 @@ public class QualityEngine {
                 result.setPassed(passed ? 1 : 0);
                 result.setMessage(String.format("探查结果 %.4f", actual));
             }
+            case TYPE_PIPELINE_COUNT -> {
+                PipelineVerdict verdict = pipelineVerdict(rows, threshold);
+                result.setActualValue(verdict.driftRate());
+                result.setPassed(verdict.passed() ? 1 : 0);
+                if (verdict.inconsistent()) {
+                    result.setErrorCode(ERR_RULE_ERROR);
+                }
+                result.setMessage(verdict.message());
+                try {
+                    result.setSampleRows(objectMapper.writeValueAsString(verdict.details()));
+                } catch (IOException e) {
+                    log.warn("序列化阶段计数失败: {}", e.getMessage());
+                }
+            }
         }
     }
+
+    /**
+     * 管道阶段计数对账的纯计算（不触达外部依赖，便于单测）。
+     *
+     * <p>取同一批采样的相邻阶段：偏差 = 上游 records_out - 下游 records_in。
+     * 正偏差是丢失，负偏差是重复，两者都计入计数偏差率（Σ|偏差| / 源端 records_in）。
+     * 源端为 0 但下游有数据说明采样批次不完整，判为不一致并交由上层报 ERROR，
+     * 而不是按 0 偏差默认通过。</p>
+     */
+    static PipelineVerdict pipelineVerdict(List<Map<String, Object>> rows, BigDecimal threshold) {
+        List<Map<String, Object>> ordered = orderByStage(rows);
+        Map<String, Object> first = ordered.get(0);
+        if (!hasColumn(first, "records_in") || !hasColumn(first, "records_out")) {
+            throw new BusinessException("阶段计数采样 SQL 必须返回 stage / records_in / records_out 三列");
+        }
+        BigDecimal limit = threshold == null ? BigDecimal.ZERO : threshold;
+        long sourceIn = longValue(first, "records_in");
+        long lost = 0;
+        long duplicated = 0;
+        long drift = 0;
+        List<Map<String, Object>> details = new ArrayList<>();
+        StringBuilder narrative = new StringBuilder();
+        for (int i = 1; i < ordered.size(); i++) {
+            Map<String, Object> previous = ordered.get(i - 1);
+            Map<String, Object> current = ordered.get(i);
+            long delta = longValue(previous, "records_out") - longValue(current, "records_in");
+            long stageLoss = Math.max(delta, 0);
+            long stageDuplicate = Math.max(-delta, 0);
+            lost += stageLoss;
+            duplicated += stageDuplicate;
+            drift += Math.abs(delta);
+            String from = stageName(previous, i);
+            String to = stageName(current, i + 1);
+            Map<String, Object> detail = new java.util.LinkedHashMap<>();
+            detail.put("from", from);
+            detail.put("to", to);
+            detail.put("loss", stageLoss);
+            detail.put("duplicate", stageDuplicate);
+            details.add(detail);
+            if (narrative.length() > 0) {
+                narrative.append("; ");
+            }
+            narrative.append(from).append("→").append(to).append(" 丢 ").append(stageLoss);
+            if (stageDuplicate > 0) {
+                narrative.append(" 重 ").append(stageDuplicate);
+            }
+        }
+        if (sourceIn == 0) {
+            boolean downstreamData = ordered.stream().skip(1)
+                    .anyMatch(row -> longValue(row, "records_in") > 0 || longValue(row, "records_out") > 0);
+            if (downstreamData) {
+                return new PipelineVerdict(BigDecimal.ONE, 0, lost, duplicated, false, true,
+                        "源端计数为 0 但下游已有数据，阶段采样不一致，无法判定", details);
+            }
+            return new PipelineVerdict(BigDecimal.ZERO, 0, 0, 0, true, false,
+                    "各阶段计数均为 0，无数据可对账", details);
+        }
+        BigDecimal rate = BigDecimal.valueOf(drift).divide(BigDecimal.valueOf(sourceIn), 4, RoundingMode.HALF_UP);
+        boolean passed = rate.compareTo(limit) <= 0;
+        String message = String.format("源端 %d，累计丢失 %d，重复 %d，计数偏差率 %.2f%%",
+                sourceIn, lost, duplicated, rate.multiply(BigDecimal.valueOf(100)));
+        if (narrative.length() > 0) {
+            message += "；" + narrative;
+        }
+        return new PipelineVerdict(rate, sourceIn, lost, duplicated, passed, false, message, details);
+    }
+
+    /** 有 stage_order 时按其排序（同值保持原序）；没有则沿用 SQL 返回顺序。 */
+    private static List<Map<String, Object>> orderByStage(List<Map<String, Object>> rows) {
+        if (rows.stream().noneMatch(row -> hasColumn(row, "stage_order"))) {
+            return rows;
+        }
+        List<Map<String, Object>> copy = new ArrayList<>(rows);
+        copy.sort(java.util.Comparator.comparingLong(row -> longValue(row, "stage_order")));
+        return copy;
+    }
+
+    private static String stageName(Map<String, Object> row, int fallbackIndex) {
+        Object stage = value(row, "stage");
+        return stage == null || String.valueOf(stage).isBlank() ? "stage" + fallbackIndex : String.valueOf(stage);
+    }
+
+    /** 列名大小写不敏感：驱动或别名写法可能改变结果集键名。 */
+    private static boolean hasColumn(Map<String, Object> row, String column) {
+        return row.keySet().stream().anyMatch(key -> key.equalsIgnoreCase(column));
+    }
+
+    private static Object value(Map<String, Object> row, String column) {
+        if (row.containsKey(column)) {
+            return row.get(column);
+        }
+        for (Map.Entry<String, Object> entry : row.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(column)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    /** 管道对账结论。 */
+    record PipelineVerdict(BigDecimal driftRate, long sourceIn, long lost, long duplicated,
+                           boolean passed, boolean inconsistent, String message,
+                           List<Map<String, Object>> details) {}
 
     private void fetchSample(String dsId, String sql, DqRuleResult result) {
         try {
@@ -386,7 +541,12 @@ public class QualityEngine {
     }
 
     private long getLong(Map<String, Object> row, String col) {
-        Object v = row.get(col);
+        return longValue(row, col);
+    }
+
+    /** 列名大小写不敏感地取长整型；缺失或非法按 0 处理。 */
+    private static long longValue(Map<String, Object> row, String col) {
+        Object v = value(row, col);
         if (v == null) {
             return 0;
         }
@@ -394,7 +554,7 @@ public class QualityEngine {
             return n.longValue();
         }
         try {
-            return Long.parseLong(v.toString());
+            return Long.parseLong(v.toString().strip());
         } catch (Exception e) {
             return 0;
         }

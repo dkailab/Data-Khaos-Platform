@@ -17,6 +17,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
@@ -95,13 +97,80 @@ public class RealtimeAdsQueryService {
      * @param staleSeconds lag 超过该值视为 STALE
      * @param maxRows      最大返回地区数
      * @param quietSeconds 分区静默窗口：最后写入距今不足该秒数时结果视为 IN_PROGRESS。0 表示关闭（默认，存量行为不变）
+     * @param tolerance    对账容差（0~1），null 或 0 表示 STRICT 精确对账
+     * @param mapping      列映射与推进信号表；null 时使用默认地区成交额口径
      */
     public record Contract(String assetId, String batchAssetId, String timezone, String amountUnit,
-                           int freshSeconds, int staleSeconds, int maxRows, int quietSeconds) {
-        /** 存量调用：不开启静默窗口，行为与加入该字段前完全一致。 */
+                           int freshSeconds, int staleSeconds, int maxRows, int quietSeconds,
+                           BigDecimal tolerance, Mapping mapping) {
+
+        public Contract {
+            if (mapping == null) {
+                mapping = Mapping.DEFAULT;
+            }
+        }
+
+        /** 存量调用：不开启静默窗口、严格对账、默认列映射。 */
         public Contract(String assetId, String batchAssetId, String timezone, String amountUnit,
                         int freshSeconds, int staleSeconds, int maxRows) {
-            this(assetId, batchAssetId, timezone, amountUnit, freshSeconds, staleSeconds, maxRows, 0);
+            this(assetId, batchAssetId, timezone, amountUnit, freshSeconds, staleSeconds, maxRows,
+                    0, null, Mapping.DEFAULT);
+        }
+
+        /** 存量调用：带静默窗口、严格对账、默认列映射。 */
+        public Contract(String assetId, String batchAssetId, String timezone, String amountUnit,
+                        int freshSeconds, int staleSeconds, int maxRows, int quietSeconds) {
+            this(assetId, batchAssetId, timezone, amountUnit, freshSeconds, staleSeconds, maxRows,
+                    quietSeconds, null, Mapping.DEFAULT);
+        }
+
+        /** 存量调用：无自定义列映射。 */
+        public Contract(String assetId, String batchAssetId, String timezone, String amountUnit,
+                        int freshSeconds, int staleSeconds, int maxRows, int quietSeconds,
+                        BigDecimal tolerance) {
+            this(assetId, batchAssetId, timezone, amountUnit, freshSeconds, staleSeconds, maxRows,
+                    quietSeconds, tolerance, Mapping.DEFAULT);
+        }
+    }
+
+    /**
+     * 实时契约的列映射：把「地区成交额」之外的实时 ADS 也接进同一响应契约。
+     *
+     * <p>默认口径保持 {@code region / gmv_cents / paid_order_count / observed_at}，
+     * 推进信号默认取 {@code <结果表>_events}。所有字段在构建时归一化，
+     * 空值回落默认，避免出现「配置了一半」的契约。</p>
+     */
+    public record Mapping(String keyColumn, String valueColumn, String countColumn, String observedColumn,
+                          String dateColumn, int valueDivisor, String progressTable, String progressDateColumn,
+                          String progressAdvancedColumn, String progressCountColumn,
+                          String progressEventTimeColumn) {
+
+        public static final Mapping DEFAULT = new Mapping("region", "gmv_cents", "paid_order_count", "observed_at",
+                "biz_date", 100, null, "biz_date", "advanced_at", "event_count", "max_event_time");
+
+        public static Mapping of(String keyColumn, String valueColumn, String countColumn, String observedColumn,
+                                 String dateColumn, Integer valueDivisor, String progressTable,
+                                 String progressDateColumn, String progressAdvancedColumn,
+                                 String progressCountColumn, String progressEventTimeColumn) {
+            String date = fill(dateColumn, DEFAULT.dateColumn());
+            return new Mapping(
+                    fill(keyColumn, DEFAULT.keyColumn()), fill(valueColumn, DEFAULT.valueColumn()),
+                    fill(countColumn, DEFAULT.countColumn()), fill(observedColumn, DEFAULT.observedColumn()),
+                    date,
+                    valueDivisor == null || valueDivisor < 1 ? DEFAULT.valueDivisor() : valueDivisor,
+                    blankToNull(progressTable),
+                    fill(progressDateColumn, date),
+                    fill(progressAdvancedColumn, DEFAULT.progressAdvancedColumn()),
+                    fill(progressCountColumn, DEFAULT.progressCountColumn()),
+                    fill(progressEventTimeColumn, DEFAULT.progressEventTimeColumn()));
+        }
+
+        private static String fill(String value, String fallback) {
+            return value == null || value.isBlank() ? fallback : value.strip();
+        }
+
+        private static String blankToNull(String value) {
+            return value == null || value.isBlank() ? null : value.strip();
         }
     }
 
@@ -111,8 +180,8 @@ public class RealtimeAdsQueryService {
         ZoneId zone = zone(contract);
         Table table = resolve(contract.assetId());
         int limit = contract.maxRows() + 1;
-        List<RegionSample> rows = readRegions(table, date, limit);
-        EventProgress progress = readEventProgress(table, date);
+        List<RegionSample> rows = readRegions(table, contract, date, limit);
+        EventProgress progress = readEventProgress(table, contract, date);
 
         boolean truncated = rows.size() > contract.maxRows();
         List<RegionSample> kept = truncated ? rows.subList(0, contract.maxRows()) : rows;
@@ -133,9 +202,9 @@ public class RealtimeAdsQueryService {
         Table realtimeTable = resolve(contract.assetId());
         Table batchTable = resolve(contract.batchAssetId());
 
-        List<RegionSample> realtimeRows = readRegions(realtimeTable, date, contract.maxRows() + 1);
-        List<RegionSample> batchRows = readRegions(batchTable, date, contract.maxRows() + 1);
-        EventProgress progress = readEventProgress(realtimeTable, date);
+        List<RegionSample> realtimeRows = readRegions(realtimeTable, contract, date, contract.maxRows() + 1);
+        List<RegionSample> batchRows = readRegions(batchTable, contract, date, contract.maxRows() + 1);
+        EventProgress progress = readEventProgress(realtimeTable, contract, date);
 
         boolean realtimeTruncated = realtimeRows.size() > contract.maxRows();
         boolean batchTruncated = batchRows.size() > contract.maxRows();
@@ -145,6 +214,9 @@ public class RealtimeAdsQueryService {
         RealtimeRegionGmv realtime = judge(contract, date, zone, realtimeRows, realtimeTruncated, progress, clock);
         RealtimeRegionGmv batch = judge(contract, date, zone, batchRows, batchTruncated, null, clock);
 
+        BigDecimal tolerance = contract.tolerance();
+        boolean tolerant = tolerance != null && tolerance.signum() > 0;
+        String mode = tolerant ? RealtimeReconcile.MODE_TOLERANCE : RealtimeReconcile.MODE_STRICT;
         Map<String, RegionSample> left = index(realtimeRows);
         Map<String, RegionSample> right = index(batchRows);
         TreeMap<String, RealtimeReconcile.RegionDiff> diffs = new TreeMap<>();
@@ -156,9 +228,7 @@ public class RealtimeAdsQueryService {
                         mine.orderCount(), null, "ONLY_REALTIME"));
                 continue;
             }
-            boolean same = mine.gmv().equals(other.gmv()) && mine.orderCount() == other.orderCount();
-            diffs.put(entry.getKey(), new RealtimeReconcile.RegionDiff(entry.getKey(), mine.gmv(), other.gmv(),
-                    mine.orderCount(), other.orderCount(), same ? "MATCHED" : "MISMATCH"));
+            diffs.put(entry.getKey(), compare(mine, other, tolerant ? tolerance : null));
         }
         for (var entry : right.entrySet()) {
             if (!left.containsKey(entry.getKey())) {
@@ -167,11 +237,41 @@ public class RealtimeAdsQueryService {
                         null, other.orderCount(), "ONLY_BATCH"));
             }
         }
+        long accepted = diffs.values().stream()
+                .filter(diff -> ACCEPTED.contains(diff.verdict())).count();
+        BigDecimal matchRate = diffs.isEmpty() ? BigDecimal.ONE
+                : BigDecimal.valueOf(accepted).divide(BigDecimal.valueOf(diffs.size()), 6, RoundingMode.HALF_UP);
+        boolean allAccepted = accepted == diffs.size();
         boolean matched = !realtime.truncated() && !batch.truncated()
                 && produced(realtime.state()) && produced(batch.state())
-                && diffs.values().stream().allMatch(diff -> "MATCHED".equals(diff.verdict()));
+                && allAccepted && (!tolerant || matchRate.compareTo(tolerance) >= 0);
         return new RealtimeReconcile(date.toString(), matched, side(realtime), side(batch),
-                new ArrayList<>(diffs.values()));
+                new ArrayList<>(diffs.values()), mode, tolerant ? tolerance : null, matchRate);
+    }
+
+    private static final java.util.Set<String> ACCEPTED =
+            java.util.Set.of("MATCHED", "WITHIN_TOLERANCE");
+
+    /** 精确相等直接 MATCHED；容差模式下金额与订单数相对偏差均不超过阈值时记 WITHIN_TOLERANCE。 */
+    private static RealtimeReconcile.RegionDiff compare(RegionSample mine, RegionSample other, BigDecimal tolerance) {
+        if (mine.gmv().equals(other.gmv()) && mine.orderCount() == other.orderCount()) {
+            return new RealtimeReconcile.RegionDiff(mine.region(), mine.gmv(), other.gmv(),
+                    mine.orderCount(), other.orderCount(), "MATCHED");
+        }
+        BigDecimal gmvRate = diffRate(new BigDecimal(mine.gmv()), new BigDecimal(other.gmv()),
+                new BigDecimal("0.01"));
+        BigDecimal countRate = diffRate(BigDecimal.valueOf(mine.orderCount()),
+                BigDecimal.valueOf(other.orderCount()), BigDecimal.ONE);
+        String verdict = tolerance != null && gmvRate.compareTo(tolerance) <= 0
+                && countRate.compareTo(tolerance) <= 0 ? "WITHIN_TOLERANCE" : "MISMATCH";
+        return new RealtimeReconcile.RegionDiff(mine.region(), mine.gmv(), other.gmv(),
+                mine.orderCount(), other.orderCount(), verdict, gmvRate, countRate);
+    }
+
+    /** 相对偏差 = |左-右| / max(|右|, floor)，floor 避免零分母；保留 6 位小数。 */
+    private static BigDecimal diffRate(BigDecimal left, BigDecimal right, BigDecimal floor) {
+        BigDecimal denominator = right.abs().max(floor);
+        return left.subtract(right).abs().divide(denominator, 6, RoundingMode.HALF_UP);
     }
 
     /** 只有定稿的结果才能参与对账：写入中（IN_PROGRESS）和尚未产出都不算一致。 */
@@ -298,7 +398,7 @@ public class RealtimeAdsQueryService {
         }
     }
 
-    private void validate(Contract contract) {
+    void validate(Contract contract) {
         if (contract.assetId() == null || !contract.assetId().matches("[A-Za-z0-9_-]{1,64}")) {
             throw new BusinessException(ResultCode.VALIDATE_FAILED, "实时契约缺少有效的 ADS 资产");
         }
@@ -308,7 +408,33 @@ public class RealtimeAdsQueryService {
         if (contract.freshSeconds() < 0 || contract.staleSeconds() <= contract.freshSeconds()) {
             throw new BusinessException(ResultCode.VALIDATE_FAILED, "时效阈值无效（STALE 须大于 FRESH）");
         }
+        validate(contract.mapping());
         zone(contract);
+    }
+
+    /** 列映射直接拼进 SQL，必须是纯标识符；配置层已校验一次，这里兜底。 */
+    private static void validate(Mapping mapping) {
+        requireIdentifier(mapping.keyColumn(), "实时契约的地区列");
+        requireIdentifier(mapping.valueColumn(), "实时契约的金额列");
+        requireIdentifier(mapping.countColumn(), "实时契约的订单数列");
+        requireIdentifier(mapping.observedColumn(), "实时契约的观测时间列");
+        requireIdentifier(mapping.progressAdvancedColumn(), "实时契约的推进时间列");
+        requireIdentifier(mapping.progressCountColumn(), "实时契约的推进事件数列");
+        requireIdentifier(mapping.progressEventTimeColumn(), "实时契约的最大事件时间列");
+        if (mapping.progressTable() != null) {
+            requireIdentifier(mapping.progressTable(), "实时契约的推进信号表");
+        }
+        requireIdentifier(mapping.dateColumn(), "实时契约的业务日期列");
+        requireIdentifier(mapping.progressDateColumn(), "实时契约的推进业务日期列");
+        if (mapping.valueDivisor() < 1 || mapping.valueDivisor() > 1_000_000) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "实时契约的金额换算除数无效");
+        }
+    }
+
+    private static void requireIdentifier(String value, String label) {
+        if (value == null || !IDENTIFIER.matcher(value).matches()) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, label + "不是合法的列名");
+        }
     }
 
     private static ZoneId zone(Contract contract) {
@@ -377,15 +503,8 @@ public class RealtimeAdsQueryService {
     }
 
     /** 读取结果行；观测时间统一按字符串取回，避免跨服务 JSON 边界的时区漂移。 */
-    List<RegionSample> readRegions(Table table, LocalDate date, int limit) {
-        String sql = """
-                SELECT region,
-                       TRIM(CAST(CAST(gmv_cents / 100 AS DECIMAL(18,2)) AS CHAR(64))) AS gmv,
-                       paid_order_count,
-                       DATE_FORMAT(observed_at, '%%Y-%%m-%%dT%%H:%%i:%%s.%%f') AS observed_at
-                FROM %s.%s WHERE biz_date = '%s' ORDER BY region LIMIT %d
-                """.formatted(quoted(table.database()), quoted(table.table()), date, limit);
-        List<Map<String, Object>> rows = query(table.datasourceId(), sql).getRows();
+    List<RegionSample> readRegions(Table table, Contract contract, LocalDate date, int limit) {
+        List<Map<String, Object>> rows = query(table.datasourceId(), regionSql(table, contract, date, limit)).getRows();
         if (rows == null) return List.of();
         List<RegionSample> samples = new ArrayList<>(rows.size());
         for (Map<String, Object> row : rows) {
@@ -393,26 +512,53 @@ public class RealtimeAdsQueryService {
                     || !(row.get("gmv") instanceof String gmv)) {
                 throw new BusinessException("实时 ADS 数据与契约不匹配");
             }
-            samples.add(new RegionSample(region, gmv, count(row.get("paid_order_count")),
+            samples.add(new RegionSample(region, gmv, count(row.get("order_count")),
                     row.get("observed_at") instanceof String value ? value : null));
         }
         return samples;
     }
 
+    /** 按映射生成结果 SQL；金额统一在 SQL 侧换算成两位小数字符串，Java 只做契约校验。 */
+    static String regionSql(Table table, Contract contract, LocalDate date, int limit) {
+        Mapping mapping = contract.mapping();
+        String gmvExpr = mapping.valueDivisor() == 1
+                ? "TRIM(CAST(CAST(%s AS DECIMAL(18,2)) AS CHAR(64)))".formatted(quoted(mapping.valueColumn()))
+                : "TRIM(CAST(CAST(%s / %d AS DECIMAL(18,2)) AS CHAR(64)))".formatted(
+                        quoted(mapping.valueColumn()), mapping.valueDivisor());
+        return """
+                SELECT %s AS region,
+                       %s AS gmv,
+                       %s AS order_count,
+                       DATE_FORMAT(%s, '%%Y-%%m-%%dT%%H:%%i:%%s.%%f') AS observed_at
+                FROM %s.%s WHERE %s = '%s' ORDER BY %s LIMIT %d
+                """.formatted(quoted(mapping.keyColumn()), gmvExpr, quoted(mapping.countColumn()),
+                quoted(mapping.observedColumn()), quoted(table.database()), quoted(table.table()),
+                quoted(mapping.dateColumn()), date, quoted(mapping.keyColumn()), limit);
+    }
+
     /** 读取作业推进信号：该业务日没有任何行即代表作业尚未推进到这里。 */
-    EventProgress readEventProgress(Table table, LocalDate date) {
-        String sql = """
-                SELECT DATE_FORMAT(advanced_at, '%%Y-%%m-%%dT%%H:%%i:%%s.%%f') AS advanced_at,
-                       event_count,
-                       DATE_FORMAT(max_event_time, '%%Y-%%m-%%dT%%H:%%i:%%s.%%f') AS max_event_time
-                FROM %s.%s WHERE biz_date = '%s' LIMIT 1
-                """.formatted(quoted(table.database()), quoted(table.table() + EVENT_SUFFIX), date);
-        List<Map<String, Object>> rows = query(table.datasourceId(), sql).getRows();
+    EventProgress readEventProgress(Table table, Contract contract, LocalDate date) {
+        List<Map<String, Object>> rows = query(table.datasourceId(), progressSql(table, contract, date)).getRows();
         if (rows == null || rows.isEmpty() || rows.get(0) == null) return null;
         Map<String, Object> row = rows.get(0);
         return new EventProgress(row.get("advanced_at") instanceof String value ? value : null,
                 count(row.get("event_count")),
                 row.get("max_event_time") instanceof String value ? value : null);
+    }
+
+    /** 推进信号默认取结果表名 + _events；配置了 progressTable 时优先使用配置。 */
+    static String progressSql(Table table, Contract contract, LocalDate date) {
+        Mapping mapping = contract.mapping();
+        String progressTable = mapping.progressTable() == null
+                ? table.table() + EVENT_SUFFIX : mapping.progressTable();
+        return """
+                SELECT DATE_FORMAT(%s, '%%Y-%%m-%%dT%%H:%%i:%%s.%%f') AS advanced_at,
+                       %s AS event_count,
+                       DATE_FORMAT(%s, '%%Y-%%m-%%dT%%H:%%i:%%s.%%f') AS max_event_time
+                FROM %s.%s WHERE %s = '%s' LIMIT 1
+                """.formatted(quoted(mapping.progressAdvancedColumn()), quoted(mapping.progressCountColumn()),
+                quoted(mapping.progressEventTimeColumn()), quoted(table.database()),
+                quoted(progressTable), quoted(mapping.progressDateColumn()), date);
     }
 
     private QueryResult query(String datasourceId, String sql) {

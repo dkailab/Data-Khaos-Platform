@@ -211,10 +211,12 @@ export interface MenuDto {
 /* ==================== 审批 ==================== */
 
 export interface ApplyRequest {
-  /** 申请类型：TABLE / REPORT / DATASOURCE / MENU */
+  /** 申请类型：TABLE / REPORT / DATASOURCE / MENU / WAREHOUSE_API / FLINK_JOB */
   applyType: string
   /** 申请目标ID（TABLE 时为数据源ID） */
   targetId?: string
+  /** 目标修订号：审批绑定到具体版本，改稿后失效 */
+  targetRevision?: number
   /** 申请目标名称（TABLE 时为 database.table） */
   targetName?: string
   reason?: string
@@ -225,6 +227,7 @@ export interface AppApply {
   applicantId?: string
   applyType?: string
   targetId?: string
+  targetRevision?: number
   targetName?: string
   reason?: string
   /** 0:待审批 1:通过 2:驳回 3:已撤销 */

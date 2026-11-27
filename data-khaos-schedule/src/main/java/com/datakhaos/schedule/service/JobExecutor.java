@@ -3,6 +3,7 @@ package com.datakhaos.schedule.service;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.datakhaos.approval.api.service.ApprovalApiClient;
 import com.datakhaos.common.exception.BusinessException;
 import com.datakhaos.common.model.R;
 import com.datakhaos.datasource.api.connector.DatasourceApiClient;
@@ -13,6 +14,7 @@ import com.datakhaos.schedule.client.DQualityApiClient;
 import com.datakhaos.schedule.entity.ScheduleJob;
 import com.datakhaos.schedule.entity.ScheduleJobLog;
 import com.datakhaos.schedule.mapper.ScheduleJobLogMapper;
+import com.datakhaos.workflow.api.model.FlinkRunDto;
 import com.datakhaos.workflow.api.model.RunAcceptDto;
 import com.datakhaos.workflow.api.model.WorkflowRunDto;
 import com.datakhaos.workflow.api.service.WorkflowApiClient;
@@ -21,6 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -29,6 +32,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -48,6 +52,7 @@ public class JobExecutor {
     private final DQualityApiClient dQualityApiClient;
     private final WorkflowApiClient workflowApiClient;
     private final PipelineApiClient pipelineApiClient;
+    private final ApprovalApiClient approvalApiClient;
 
     /** 正在运行的任务ID（防止并发触发同一任务） */
     private final Set<String> running = ConcurrentHashMap.newKeySet();
@@ -166,6 +171,9 @@ public class JobExecutor {
             case "WORKFLOW" -> {
                 return executeWorkflowJob(job, jobLog);
             }
+            case "FLINK" -> {
+                return executeFlinkJob(job, jobLog);
+            }
             case "SYNC" -> {
                 return executeSyncJob(job, jobLog);
             }
@@ -250,6 +258,77 @@ public class JobExecutor {
         }
         log.info("WORKFLOW 任务 {} 完成，runId={}", job.getJobName(), runId);
         return 1;
+    }
+
+    // ==================== FLINK（实时作业） ====================
+
+    /**
+     * 触发已审批的实时作业版本。
+     *
+     * <p>以 SUBMITTED 视为成功：流作业不会自行结束，调度只负责「提交」。
+     * 同一计划时刻生成稳定 requestId，重复触发命中同一条运行记录，
+     * 不会产生第二条活动运行。</p>
+     */
+    private int executeFlinkJob(ScheduleJob job, ScheduleJobLog jobLog) {
+        String projectId = parseJsonField(job.getParams(), "projectId");
+        if (StrUtil.isBlank(projectId)) {
+            throw new BusinessException("FLINK 任务未配置项目（params.projectId）");
+        }
+        String assetId = resolveRef(job, "assetId");
+        if (StrUtil.isBlank(assetId)) {
+            throw new BusinessException("FLINK 任务未配置作业资产（refId 或 params.assetId）");
+        }
+        int version = parseFlinkVersion(job);
+        try {
+            if (approvalApiClient.findApproved(ApprovalApiClient.TYPE_FLINK_JOB, assetId, version).isEmpty()) {
+                throw new BusinessException("该作业版本未取得审批，拒绝提交");
+            }
+        } catch (IllegalStateException e) {
+            throw new NoRetryException("无法确认作业版本是否已审批: " + e.getMessage());
+        }
+        // 作业提交接口只收 UUID 作为幂等键：由「任务+计划时刻」派生 UUIDv5，
+        // 既满足格式要求，又保证同一计划时刻重复触发命中同一条运行记录。
+        String requestKey;
+        if (jobLog.getScheduledAt() != null) {
+            requestKey = "sched:" + job.getId() + ":"
+                    + jobLog.getScheduledAt().atZone(BIZ_ZONE).format(REQUEST_KEY_FMT);
+        } else {
+            requestKey = "manual:" + jobLog.getId();
+        }
+        String requestId = UUID.nameUUIDFromBytes(requestKey.getBytes(StandardCharsets.UTF_8)).toString();
+        FlinkRunDto run;
+        try {
+            run = workflowApiClient.triggerFlink(projectId, assetId, version, requestId);
+        } catch (RestClientException | IllegalStateException e) {
+            throw new NoRetryException("无法确认实时作业是否已提交: " + e.getMessage());
+        }
+        if (run == null || StrUtil.isBlank(run.id())) {
+            throw new NoRetryException("实时作业提交返回空运行记录");
+        }
+        String state = run.state() == null ? "" : run.state();
+        if ("SUBMITTED".equals(state)) {
+            log.info("FLINK 任务 {} 已提交实时作业 {} v{}，runId={}，engineJobId={}",
+                    job.getJobName(), assetId, version, run.id(), run.engineJobId());
+            return 1;
+        }
+        if ("FAILED".equals(state) || "CANCELED".equals(state)) {
+            throw new BusinessException("实时作业提交失败: runId=" + run.id() + "，error="
+                    + (run.message() == null ? "-" : run.message()));
+        }
+        throw new NoRetryException("实时作业提交结果待确认: runId=" + run.id() + "，state=" + state);
+    }
+
+    private int parseFlinkVersion(ScheduleJob job) {
+        String text = parseJsonField(job.getParams(), "version");
+        try {
+            int version = Integer.parseInt(text == null ? "" : text.strip());
+            if (version > 0) {
+                return version;
+            }
+        } catch (NumberFormatException ignored) {
+            // 统一走下面的错误提示
+        }
+        throw new BusinessException("FLINK 任务未配置有效的作业版本（params.version）");
     }
 
     // ==================== SYNC（管道） ====================

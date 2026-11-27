@@ -181,8 +181,9 @@ COMMENT ON TABLE sys_table_permission IS '表权限表';
 CREATE TABLE app_apply (
     id              VARCHAR(32) PRIMARY KEY,
     applicant_id    VARCHAR(32) NOT NULL,
-    apply_type      VARCHAR(50) NOT NULL,      -- TABLE / REPORT / DATASOURCE / MENU
-    target_id       VARCHAR(32),
+    apply_type      VARCHAR(50) NOT NULL,      -- TABLE / REPORT / DATASOURCE / MENU / WAREHOUSE_API / FLINK_JOB
+    target_id       VARCHAR(64),
+    target_revision INT,                       -- 目标修订号，审批绑定到具体版本
     target_name     VARCHAR(200),
     reason          VARCHAR(1000),
     status          TINYINT DEFAULT 0,         -- 0:待审批 1:通过 2:驳回 3:已撤销

@@ -29,6 +29,19 @@ export interface WarehouseApiVersion {
   freshnessFreshSeconds?: number
   freshnessStaleSeconds?: number
   quietSeconds?: number
+  reconcileTolerance?: number | null
+  /** 实时契约列映射：为空表示默认地区成交额口径 */
+  realtimeKeyColumn?: string | null
+  realtimeValueColumn?: string | null
+  realtimeCountColumn?: string | null
+  realtimeObservedColumn?: string | null
+  realtimeDateColumn?: string | null
+  realtimeValueDivisor?: number | null
+  realtimeProgressTable?: string | null
+  realtimeProgressDateColumn?: string | null
+  realtimeProgressAdvancedColumn?: string | null
+  realtimeProgressCountColumn?: string | null
+  realtimeProgressEventTimeColumn?: string | null
   status: WarehouseApiStatus
   revision: number
   createdBy?: string
@@ -53,6 +66,23 @@ export interface WarehouseApiDraft {
   freshnessFreshSeconds?: number
   freshnessStaleSeconds?: number
   quietSeconds?: number
+  reconcileTolerance?: number | null
+  realtimeMapping?: WarehouseApiRealtimeMapping
+}
+
+/** 列映射：所有字段可省略，省略即按默认地区成交额口径解释。 */
+export interface WarehouseApiRealtimeMapping {
+  keyColumn?: string
+  valueColumn?: string
+  countColumn?: string
+  observedColumn?: string
+  dateColumn?: string
+  valueDivisor?: number
+  progressTable?: string
+  progressDateColumn?: string
+  progressAdvancedColumn?: string
+  progressCountColumn?: string
+  progressEventTimeColumn?: string
 }
 
 export interface WarehouseApiCredential {
@@ -125,8 +155,13 @@ export interface RealtimeReconcile {
     batchGmv: string | null
     realtimeOrderCount: number | null
     batchOrderCount: number | null
-    verdict: 'MATCHED' | 'ONLY_REALTIME' | 'ONLY_BATCH' | 'MISMATCH'
+    verdict: 'MATCHED' | 'WITHIN_TOLERANCE' | 'ONLY_REALTIME' | 'ONLY_BATCH' | 'MISMATCH'
+    gmvDiffRate?: string | null
+    orderDiffRate?: string | null
   }>
+  mode: 'STRICT' | 'TOLERANCE'
+  tolerance: string | null
+  matchRate: string
 }
 
 /** 受管物化分区就绪状态 */

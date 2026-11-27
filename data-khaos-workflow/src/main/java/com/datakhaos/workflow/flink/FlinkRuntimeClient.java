@@ -276,6 +276,44 @@ public class FlinkRuntimeClient {
                 sample);
     }
 
+    /**
+     * 采集每个运行中算子的累计进出记录数，供管道阶段计数对账使用。
+     * 与 per-second 速率不同，numRecordsIn/Out 是累计计数器，可以做相邻阶段的差值断言。
+     */
+    public List<StageCount> stageCounts(String jobId) {
+        JsonNode job = jobDetails(jobId);
+        List<StageCount> counts = new ArrayList<>();
+        // JobDetails 的 vertices 按拓扑顺序返回（Flink REST 契约），据此记录阶段序号，
+        // 让质量侧不必依赖采样 SQL 的 ORDER BY 就能按管道顺序对账。
+        int order = 0;
+        for (JsonNode vertex : job.path("vertices")) {
+            if (!"RUNNING".equals(vertex.path("status").asText())) continue;
+            String vertexId = vertex.path("id").asText();
+            String path = metricsPath(jobId, vertexId) + "?get=numRecordsIn,numRecordsOut&agg=sum";
+            JsonNode metrics = call(jobManager, "GET", path, null);
+            Long in = sumMetric(metrics, "numRecordsIn");
+            Long out = sumMetric(metrics, "numRecordsOut");
+            if (in == null || out == null) continue;
+            counts.add(new StageCount(vertexId, vertex.path("name").asText(vertexId), in, out, order++));
+        }
+        return counts;
+    }
+
+    /** Flink 1.20 的聚合指标首项是 sum；找不到目标指标时返回 null，避免把缺失当 0。 */
+    private static Long sumMetric(JsonNode metrics, String name) {
+        if (!metrics.isArray()) return null;
+        for (JsonNode metric : metrics) {
+            String id = metric.path("id").asText();
+            if (id.contains(name) && !id.contains("PerSecond")) {
+                return metric.path("value").asLong();
+            }
+        }
+        return null;
+    }
+
+    /** stageOrder 为作业拓扑中的相对次序，用于质量侧还原管道上游→下游。 */
+    public record StageCount(String vertexId, String stage, long recordsIn, long recordsOut, int stageOrder) {}
+
     public Optional<FlinkEventTimeSample> eventTime(String jobId, String vertexId) {
         checkJobId(vertexId);
         JsonNode job = jobDetails(jobId);

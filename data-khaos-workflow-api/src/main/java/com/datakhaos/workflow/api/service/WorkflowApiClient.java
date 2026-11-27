@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.datakhaos.common.constant.CommonConstants;
 import com.datakhaos.common.model.R;
 import com.datakhaos.workflow.api.model.BackfillResultDto;
+import com.datakhaos.workflow.api.model.FlinkRunDto;
 import com.datakhaos.workflow.api.model.RunAcceptDto;
 import com.datakhaos.workflow.api.model.WorkflowBackfillRequestDto;
 import com.datakhaos.workflow.api.model.WorkflowNodeRunDto;
@@ -260,6 +261,46 @@ public class WorkflowApiClient {
     /** 是否为终态 */
     public static boolean isFinal(String status) {
         return "SUCCESS".equals(status) || "FAILED".equals(status) || "STOP".equals(status) || "RECOVERY_REQUIRED".equals(status);
+    }
+
+    // ==================== 实时作业（Flink） ====================
+
+    /**
+     * 按作业版本提交实时作业。requestId 为幂等键：同一版本重复触发只返回原运行，
+     * 不会产生第二条活动运行。
+     */
+    public FlinkRunDto triggerFlink(String projectId, String assetId, int version, String requestId) {
+        String url = SERVICE_URL.replace("/api/workflow", "/api/workflow/flink")
+                + "/projects/{projectId}/assets/{assetId}/versions/{version}/runs";
+        Map<String, Object> body = new HashMap<>();
+        body.put("requestId", requestId);
+        ResponseEntity<R<FlinkRunDto>> resp = restTemplate.exchange(url, HttpMethod.POST,
+                new HttpEntity<>(body, systemHeaders()),
+                new ParameterizedTypeReference<R<FlinkRunDto>>() {},
+                projectId, assetId, version);
+        R<FlinkRunDto> result = resp.getBody();
+        if (result == null || result.getCode() != 0) {
+            throw new IllegalStateException("提交实时作业失败: " + (result == null ? "无响应" : result.getMsg()));
+        }
+        if (result.getData() == null || StrUtil.isBlank(result.getData().id())) {
+            throw new RestClientException("实时作业提交返回空运行记录");
+        }
+        return result.getData();
+    }
+
+    /** 查询实时作业运行；用于提交结果待确认时复核。 */
+    public FlinkRunDto flinkRun(String projectId, String assetId, String runId) {
+        String url = SERVICE_URL.replace("/api/workflow", "/api/workflow/flink")
+                + "/projects/{projectId}/assets/{assetId}/runs/{runId}/refresh";
+        ResponseEntity<R<FlinkRunDto>> resp = restTemplate.exchange(url, HttpMethod.POST,
+                new HttpEntity<>(systemHeaders()),
+                new ParameterizedTypeReference<R<FlinkRunDto>>() {},
+                projectId, assetId, runId);
+        R<FlinkRunDto> result = resp.getBody();
+        if (result == null || result.getCode() != 0) {
+            throw new IllegalStateException("查询实时作业失败: " + (result == null ? "无响应" : result.getMsg()));
+        }
+        return result.getData();
     }
 
     private HttpHeaders systemHeaders() {

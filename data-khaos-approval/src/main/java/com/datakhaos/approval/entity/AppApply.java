@@ -20,11 +20,14 @@ public class AppApply extends BaseEntity {
     /** 申请人ID */
     private String applicantId;
 
-    /** 申请类型：TABLE / REPORT / DATASOURCE / MENU */
+    /** 申请类型：TABLE / REPORT / DATASOURCE / MENU / WAREHOUSE_API / FLINK_JOB */
     private String applyType;
 
-    /** 申请目标ID（TABLE 时为数据源ID） */
+    /** 申请目标ID（TABLE 时为数据源ID；WAREHOUSE_API 时为版本ID；FLINK_JOB 时为作业资产ID） */
     private String targetId;
+
+    /** 目标修订号：审批只对当时那一版有效，改稿后需重新审批 */
+    private Integer targetRevision;
 
     /** 申请目标名称（TABLE 时为 database.table） */
     private String targetName;

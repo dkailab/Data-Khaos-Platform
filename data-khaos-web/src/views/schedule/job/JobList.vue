@@ -42,6 +42,9 @@
           <span v-else-if="row.jobType === 'SYNC' || row.refType === 'PIPELINE'">
             {{ pipelineName(row.refId) || row.refId || '未绑定同步任务' }}
           </span>
+          <span v-else-if="row.jobType === 'FLINK' || row.refType === 'FLINK'">
+            {{ row.refId || '未绑定实时作业' }}
+          </span>
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>
@@ -114,6 +117,19 @@
               :label="pipeline.name ? `${pipeline.name} (${pipeline.id})` : pipeline.id" :value="pipeline.id" />
           </el-select>
         </el-form-item>
+
+        <template v-else-if="form.jobType === 'FLINK'">
+          <el-form-item label="项目ID">
+            <el-input v-model="flinkProjectId" placeholder="如 pg_001" />
+          </el-form-item>
+          <el-form-item label="作业资产ID">
+            <el-input v-model="form.refId" placeholder="Flink 作业资产 ID" />
+          </el-form-item>
+          <el-form-item label="作业版本">
+            <el-input-number v-model="flinkVersion" :min="1" />
+            <div class="field-hint">只提交已审批通过的具体版本；无审批记录会被调度拒绝。</div>
+          </el-form-item>
+        </template>
 
         <template v-if="form.jobType === 'SQL'">
           <el-form-item label="数据源ID" prop="datasourceId">
@@ -243,12 +259,14 @@ const paramsPlaceholder = computed(() => {
   if (form.jobType === 'QUALITY') return '质量任务ID，如 {"taskId": "质量任务ID"}'
   if (form.jobType === 'WORKFLOW') return '传给工作流的参数，如 {"bizDate": "2026-11-27"}'
   if (form.jobType === 'SYNC') return '传给同步任务的参数，如 {"batchSize": 1000}'
+  if (form.jobType === 'FLINK') return '项目与版本由上方字段生成，如 {"projectId":"pg_001","version":1}'
   return '如 {"batchSize": 1000}'
 })
 
 const jobTypes = [
   { label: '工作流 WORKFLOW', value: 'WORKFLOW' },
   { label: '同步 SYNC', value: 'SYNC' },
+  { label: '实时作业 FLINK', value: 'FLINK' },
   { label: 'SQL', value: 'SQL' },
   { label: '质量稽核 QUALITY', value: 'QUALITY' },
 ]
@@ -333,6 +351,9 @@ const dialogVisible = ref(false)
 const formRef = ref<FormInstance>()
 const isEdit = ref(false)
 const form = reactive<ScheduleJob>({ status: 0, jobType: 'SYNC', retryCount: 0, retryInterval: 0, timeout: 60 })
+/** FLINK 任务的非绑定字段：项目与作业版本随 params 一起提交 */
+const flinkProjectId = ref('')
+const flinkVersion = ref(1)
 const formRules: FormRules = {
   jobName: [{ required: true, message: '请输入任务名称', trigger: 'blur' }],
   jobType: [{ required: true, message: '请选择任务类型', trigger: 'change' }],
@@ -385,6 +406,8 @@ function openCreate() {
     targetTable: '', params: '', refType: 'WORKFLOW', refId: '', status: 0, retryCount: 0,
     retryInterval: 0, timeout: 60,
   })
+  flinkProjectId.value = ''
+  flinkVersion.value = 1
   dialogVisible.value = true
 }
 
@@ -393,6 +416,17 @@ function openEdit(row: ScheduleJob) {
   Object.assign(form, { ...row })
   if (!form.refType) {
     form.refType = form.jobType === 'WORKFLOW' ? 'WORKFLOW' : form.jobType === 'SYNC' ? 'PIPELINE' : undefined
+  }
+  flinkProjectId.value = ''
+  flinkVersion.value = 1
+  if (form.jobType === 'FLINK' && form.params) {
+    try {
+      const parsed = JSON.parse(form.params)
+      flinkProjectId.value = parsed.projectId ?? ''
+      flinkVersion.value = Number(parsed.version) > 0 ? Number(parsed.version) : 1
+    } catch {
+      /* 参数不是合法 JSON 时保留空值，提交时会重新校验 */
+    }
   }
   dialogVisible.value = true
 }
@@ -407,8 +441,36 @@ async function submit() {
     ElMessage.warning('请选择要触发的同步任务')
     return
   }
+  if (form.jobType === 'FLINK') {
+    if (!form.refId?.trim()) {
+      ElMessage.warning('请填写实时作业资产 ID')
+      return
+    }
+    if (!flinkProjectId.value.trim()) {
+      ElMessage.warning('请填写实时作业所属项目 ID')
+      return
+    }
+    if (flinkVersion.value < 1) {
+      ElMessage.warning('作业版本必须大于 0')
+      return
+    }
+    let parsed: Record<string, any> = {}
+    if (form.params?.trim()) {
+      try {
+        parsed = JSON.parse(form.params)
+      } catch {
+        ElMessage.warning('参数不是合法 JSON')
+        return
+      }
+    }
+    form.refId = form.refId.trim()
+    form.params = JSON.stringify({
+      ...parsed, projectId: flinkProjectId.value.trim(), assetId: form.refId, version: flinkVersion.value,
+    })
+  }
   form.refType = form.jobType === 'WORKFLOW' ? 'WORKFLOW'
-    : form.jobType === 'SYNC' ? 'PIPELINE' : undefined
+    : form.jobType === 'SYNC' ? 'PIPELINE'
+    : form.jobType === 'FLINK' ? 'FLINK' : undefined
   submitting.value = true
   try {
     if (isEdit.value) {

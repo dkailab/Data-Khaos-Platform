@@ -24,6 +24,7 @@ COPY data-khaos-mart-api/     ./data-khaos-mart-api/
 COPY data-khaos-dquality-api/ ./data-khaos-dquality-api/
 COPY data-khaos-pipeline-api/   ./data-khaos-pipeline-api/
 COPY data-khaos-workflow-api/   ./data-khaos-workflow-api/
+COPY data-khaos-approval-api/   ./data-khaos-approval-api/
 COPY data-khaos-gateway/      ./data-khaos-gateway/
 COPY data-khaos-auth/         ./data-khaos-auth/
 COPY data-khaos-permission/   ./data-khaos-permission/

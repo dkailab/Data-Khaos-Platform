@@ -109,7 +109,8 @@ public class RuleService {
                 Map.of("type", QualityEngine.TYPE_UNIQUE, "name", "唯一性校验", "desc", "检测字段重复"),
                 Map.of("type", QualityEngine.TYPE_VALUE_RANGE, "name", "值域校验", "desc", "检测越界值"),
                 Map.of("type", QualityEngine.TYPE_CUSTOM_SQL, "name", "自定义SQL校验", "desc", "返回违规行的 SQL"),
-                Map.of("type", QualityEngine.TYPE_CUSTOM_PROBE, "name", "自定义SQL探查", "desc", "返回单个数值统计")
+                Map.of("type", QualityEngine.TYPE_CUSTOM_PROBE, "name", "自定义SQL探查", "desc", "返回单个数值统计"),
+                Map.of("type", QualityEngine.TYPE_PIPELINE_COUNT, "name", "管道阶段计数", "desc", "相邻阶段计数偏差对账")
         );
     }
 }

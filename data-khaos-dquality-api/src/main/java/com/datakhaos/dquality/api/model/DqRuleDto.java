@@ -23,7 +23,7 @@ public class DqRuleDto implements Serializable {
 
     private String ruleName;
 
-    /** 规则模板类型 NOT_NULL / UNIQUE / VALUE_RANGE / CUSTOM_SQL / CUSTOM_PROBE */
+    /** 规则模板类型 NOT_NULL / UNIQUE / VALUE_RANGE / CUSTOM_SQL / CUSTOM_PROBE / PIPELINE_COUNT */
     private String ruleType;
 
     private String datasourceId;

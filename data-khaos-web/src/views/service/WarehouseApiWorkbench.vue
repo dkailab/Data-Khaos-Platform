@@ -110,6 +110,12 @@ const draftForm = reactive({
   dataMode: 'BATCH' as WarehouseApiDataMode,
   realtimeAssetId: '', realtimeBatchAssetId: '', observedTimezone: 'Asia/Shanghai', amountUnit: 'CNY',
   freshnessFreshSeconds: 60, freshnessStaleSeconds: 300, quietSeconds: 0,
+  reconcileTolerance: 0,
+  mapping: {
+    keyColumn: '', valueColumn: '', countColumn: '', observedColumn: '', dateColumn: '', valueDivisor: 0,
+    progressTable: '', progressDateColumn: '', progressAdvancedColumn: '', progressCountColumn: '',
+    progressEventTimeColumn: '',
+  },
 })
 const editing = ref<WarehouseApiVersion>()
 
@@ -126,6 +132,12 @@ function resetDraftForm() {
   draftForm.freshnessFreshSeconds = 60
   draftForm.freshnessStaleSeconds = 300
   draftForm.quietSeconds = 0
+  draftForm.reconcileTolerance = 0
+  Object.assign(draftForm.mapping, {
+    keyColumn: '', valueColumn: '', countColumn: '', observedColumn: '', dateColumn: '', valueDivisor: 0,
+    progressTable: '', progressDateColumn: '', progressAdvancedColumn: '', progressCountColumn: '',
+    progressEventTimeColumn: '',
+  })
 }
 
 function openCreate() {
@@ -154,6 +166,20 @@ function openEdit(row: WarehouseApiVersion) {
   draftForm.freshnessFreshSeconds = row.freshnessFreshSeconds ?? 60
   draftForm.freshnessStaleSeconds = row.freshnessStaleSeconds ?? 300
   draftForm.quietSeconds = row.quietSeconds ?? 0
+  draftForm.reconcileTolerance = Number(row.reconcileTolerance ?? 0)
+  Object.assign(draftForm.mapping, {
+    keyColumn: row.realtimeKeyColumn ?? '',
+    valueColumn: row.realtimeValueColumn ?? '',
+    countColumn: row.realtimeCountColumn ?? '',
+    observedColumn: row.realtimeObservedColumn ?? '',
+    dateColumn: row.realtimeDateColumn ?? '',
+    valueDivisor: row.realtimeValueDivisor ?? 0,
+    progressTable: row.realtimeProgressTable ?? '',
+    progressDateColumn: row.realtimeProgressDateColumn ?? '',
+    progressAdvancedColumn: row.realtimeProgressAdvancedColumn ?? '',
+    progressCountColumn: row.realtimeProgressCountColumn ?? '',
+    progressEventTimeColumn: row.realtimeProgressEventTimeColumn ?? '',
+  })
   draftDialog.value = true
 }
 
@@ -171,7 +197,29 @@ function draftPayload() {
     freshnessFreshSeconds: draftForm.freshnessFreshSeconds,
     freshnessStaleSeconds: draftForm.freshnessStaleSeconds,
     quietSeconds: draftForm.quietSeconds,
+    reconcileTolerance: draftForm.reconcileTolerance > 0 ? draftForm.reconcileTolerance : undefined,
+    realtimeMapping: mappingPayload(),
   }
+}
+
+/** 列映射全部留空时不提交，后端按默认地区成交额口径解释。 */
+function mappingPayload() {
+  const m = draftForm.mapping
+  const text = (value: string) => value.trim() || undefined
+  const payload = {
+    keyColumn: text(m.keyColumn),
+    valueColumn: text(m.valueColumn),
+    countColumn: text(m.countColumn),
+    observedColumn: text(m.observedColumn),
+    dateColumn: text(m.dateColumn),
+    valueDivisor: m.valueDivisor > 0 ? m.valueDivisor : undefined,
+    progressTable: text(m.progressTable),
+    progressDateColumn: text(m.progressDateColumn),
+    progressAdvancedColumn: text(m.progressAdvancedColumn),
+    progressCountColumn: text(m.progressCountColumn),
+    progressEventTimeColumn: text(m.progressEventTimeColumn),
+  }
+  return Object.values(payload).some((value) => value !== undefined) ? payload : undefined
 }
 
 async function submitDraft() {
@@ -197,6 +245,29 @@ async function submitDraft() {
     }
     if (draftForm.quietSeconds < 0 || draftForm.quietSeconds > 3600) {
       ElMessage.warning('静默窗口需在 0 至 3600 秒之间')
+      return
+    }
+    if (draftForm.reconcileTolerance < 0 || draftForm.reconcileTolerance > 1) {
+      ElMessage.warning('对账容差需在 0 至 1 之间，0 表示精确对账')
+      return
+    }
+    const identifier = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+    const mapping = draftForm.mapping
+    const columns: Array<[string, string]> = [
+      ['地区列', mapping.keyColumn], ['金额列', mapping.valueColumn], ['订单数列', mapping.countColumn],
+      ['观测时间列', mapping.observedColumn], ['业务日期列', mapping.dateColumn],
+      ['推进信号表', mapping.progressTable], ['推进日期列', mapping.progressDateColumn],
+      ['推进时间列', mapping.progressAdvancedColumn], ['推进事件数列', mapping.progressCountColumn],
+      ['最大事件时间列', mapping.progressEventTimeColumn],
+    ]
+    for (const [label, value] of columns) {
+      if (value.trim() && !identifier.test(value.trim())) {
+        ElMessage.warning(`${label}不是合法的标识符`)
+        return
+      }
+    }
+    if (mapping.valueDivisor < 0 || mapping.valueDivisor > 1000000) {
+      ElMessage.warning('金额换算除数需在 1 至 1000000 之间，留空默认按分转元')
       return
     }
   }
@@ -561,6 +632,48 @@ void loadProjects()
             <el-input-number v-model="draftForm.quietSeconds" :min="0" :max="3600" />
             <span class="hint">秒，0=关闭；作业刚推进时返回 IN_PROGRESS</span>
           </el-form-item>
+          <el-form-item label="对账容差">
+            <el-input-number v-model="draftForm.reconcileTolerance" :min="0" :max="1" :step="0.01" :precision="2" />
+            <span class="hint">0=精确对账；如 0.05 表示金额与订单数偏差 5% 内算一致</span>
+          </el-form-item>
+          <el-collapse class="mapping-collapse">
+            <el-collapse-item title="列映射与推进信号（留空使用默认地区成交额口径）" name="mapping">
+              <el-form-item label="地区列">
+                <el-input v-model="draftForm.mapping.keyColumn" placeholder="默认 region" />
+              </el-form-item>
+              <el-form-item label="金额列">
+                <el-input v-model="draftForm.mapping.valueColumn" placeholder="默认 gmv_cents" />
+              </el-form-item>
+              <el-form-item label="订单数列">
+                <el-input v-model="draftForm.mapping.countColumn" placeholder="默认 paid_order_count" />
+              </el-form-item>
+              <el-form-item label="观测时间列">
+                <el-input v-model="draftForm.mapping.observedColumn" placeholder="默认 observed_at" />
+              </el-form-item>
+              <el-form-item label="业务日期列">
+                <el-input v-model="draftForm.mapping.dateColumn" placeholder="默认 biz_date" />
+              </el-form-item>
+              <el-form-item label="金额除数">
+                <el-input-number v-model="draftForm.mapping.valueDivisor" :min="0" :max="1000000" />
+                <span class="hint">100=列存分（默认）；1=列已是元</span>
+              </el-form-item>
+              <el-form-item label="推进信号表">
+                <el-input v-model="draftForm.mapping.progressTable" placeholder="默认 结果表名_events" />
+              </el-form-item>
+              <el-form-item label="推进日期列">
+                <el-input v-model="draftForm.mapping.progressDateColumn" placeholder="默认与业务日期列一致" />
+              </el-form-item>
+              <el-form-item label="推进时间列">
+                <el-input v-model="draftForm.mapping.progressAdvancedColumn" placeholder="默认 advanced_at" />
+              </el-form-item>
+              <el-form-item label="推进事件数列">
+                <el-input v-model="draftForm.mapping.progressCountColumn" placeholder="默认 event_count" />
+              </el-form-item>
+              <el-form-item label="最大事件时间列">
+                <el-input v-model="draftForm.mapping.progressEventTimeColumn" placeholder="默认 max_event_time" />
+              </el-form-item>
+            </el-collapse-item>
+          </el-collapse>
         </template>
       </el-form>
       <el-alert
@@ -663,14 +776,24 @@ void loadProjects()
                 {{ reconcileResult.matched ? '逐地区一致' : '存在差异' }}
               </el-tag>
             </el-descriptions-item>
+            <el-descriptions-item label="对账模式">
+              {{ reconcileResult.mode === 'TOLERANCE' ? `容差 ${reconcileResult.tolerance}` : 'STRICT 精确' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="吻合率">{{ reconcileResult.matchRate }}</el-descriptions-item>
             <el-descriptions-item label="实时可用性">{{ reconcileResult.realtime.state }}</el-descriptions-item>
             <el-descriptions-item label="批侧可用性">{{ reconcileResult.batch.state }}</el-descriptions-item>
             <el-descriptions-item label="实时处理滞后">{{ reconcileResult.realtime.processingLagSeconds ?? '—' }} 秒</el-descriptions-item>
           </el-descriptions>
           <el-table :data="reconcileResult.regions" border size="small">
-            <el-table-column prop="region" label="地区" min-width="110" />
-            <el-table-column prop="realtimeGmv" label="实时 GMV" min-width="110" />
-            <el-table-column prop="batchGmv" label="批 GMV" min-width="110" />
+            <el-table-column prop="region" label="地区" min-width="100" />
+            <el-table-column prop="realtimeGmv" label="实时 GMV" min-width="105" />
+            <el-table-column prop="batchGmv" label="批 GMV" min-width="105" />
+            <el-table-column prop="gmvDiffRate" label="金额偏差率" min-width="105">
+              <template #default="{ row }">{{ row.gmvDiffRate ?? '—' }}</template>
+            </el-table-column>
+            <el-table-column prop="orderDiffRate" label="订单偏差率" min-width="105">
+              <template #default="{ row }">{{ row.orderDiffRate ?? '—' }}</template>
+            </el-table-column>
             <el-table-column prop="verdict" label="判定" min-width="130" />
           </el-table>
         </template>
@@ -766,6 +889,7 @@ void loadProjects()
 .warehouse-api { display: flex; flex-direction: column; gap: var(--dk-space-4); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dk-space-3); }
 .hint { color: var(--dk-muted); font-size: 13px; }
+.mapping-collapse { margin: 0 0 12px 0; }
 .pager { display: flex; justify-content: flex-end; }
 h4 {
   display: flex; align-items: center; gap: var(--dk-space-2);

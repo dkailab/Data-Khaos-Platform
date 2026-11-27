@@ -5,6 +5,7 @@ import com.datakhaos.query.dto.RealtimeReconcile;
 import com.datakhaos.query.dto.RealtimeRegionGmv;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -197,7 +198,7 @@ class RealtimeAdsQueryTest {
             }
 
             @Override
-            List<RegionSample> readRegions(Table table, LocalDate date, int limit) {
+            List<RegionSample> readRegions(Table table, Contract contract, LocalDate date, int limit) {
                 return "mt_realtime_ads".equals(table.table())
                         ? List.of(new RegionSample("east", "100.00", 2, "2026-11-17T00:05:12.345"),
                                   new RegionSample("north", "50.00", 1, "2026-11-17T00:05:12.345"))
@@ -206,7 +207,7 @@ class RealtimeAdsQueryTest {
             }
 
             @Override
-            EventProgress readEventProgress(Table table, LocalDate date) {
+            EventProgress readEventProgress(Table table, Contract contract, LocalDate date) {
                 return progress("2026-11-17T00:05:13.000", 3);
             }
         };
@@ -232,12 +233,12 @@ class RealtimeAdsQueryTest {
             }
 
             @Override
-            List<RegionSample> readRegions(Table table, LocalDate date, int limit) {
+            List<RegionSample> readRegions(Table table, Contract contract, LocalDate date, int limit) {
                 return List.of(new RegionSample("east", "100.00", 2, "2026-11-17T00:05:12.345"));
             }
 
             @Override
-            EventProgress readEventProgress(Table table, LocalDate date) {
+            EventProgress readEventProgress(Table table, Contract contract, LocalDate date) {
                 return progress("2026-11-17T00:05:13.000", 1);
             }
         };
@@ -265,12 +266,12 @@ class RealtimeAdsQueryTest {
                 }
 
                 @Override
-                List<RegionSample> readRegions(Table table, LocalDate date, int limit) {
+                List<RegionSample> readRegions(Table table, Contract contract, LocalDate date, int limit) {
                     return "mt_realtime_ads".equals(table.table()) ? left : List.of(first, other);
                 }
 
                 @Override
-                EventProgress readEventProgress(Table table, LocalDate date) {
+                EventProgress readEventProgress(Table table, Contract contract, LocalDate date) {
                     return null;
                 }
             };
@@ -292,6 +293,60 @@ class RealtimeAdsQueryTest {
         assertEquals(RealtimeAdsQueryService.STATE_NOT_YET_PRODUCED, reconcile.realtime().state());
         assertEquals(RealtimeAdsQueryService.STATE_NOT_YET_PRODUCED, reconcile.batch().state());
         assertTrue(reconcile.regions().isEmpty());
+    }
+
+    /** 同一组两侧数据：STRICT 判差异，TOLERANCE 在阈值内判一致，且回显模式、阈值与吻合率。 */
+    @Test
+    void toleranceModeAcceptsSmallDifferencesAndEchoesEvidence() {
+        var service = sides("100.00", 20, "95.00", 20);
+        var strict = service.reconcile(CONTRACT, DATE.toString());
+        assertFalse(strict.matched());
+        assertEquals(RealtimeReconcile.MODE_STRICT, strict.mode());
+        assertNull(strict.tolerance());
+        assertEquals("MISMATCH", verdict(strict, "east"));
+
+        var tolerant = service.reconcile(withTolerance(new BigDecimal("0.06")), DATE.toString());
+        assertTrue(tolerant.matched());
+        assertEquals(RealtimeReconcile.MODE_TOLERANCE, tolerant.mode());
+        assertEquals(0, new BigDecimal("0.06").compareTo(tolerant.tolerance()));
+        assertEquals("WITHIN_TOLERANCE", verdict(tolerant, "east"));
+        assertEquals(0, BigDecimal.ONE.compareTo(tolerant.matchRate()));
+        // 相对偏差以批侧为分母：|100-95| / 95 = 0.052632
+        assertEquals(0, new BigDecimal("0.052632").compareTo(tolerant.regions().get(0).gmvDiffRate()));
+    }
+
+    /** 超出容差、订单数偏差过大、或单侧缺地区时都不能判一致。 */
+    @Test
+    void toleranceModeStillRejectsOutOfRangeAndMissingRegions() {
+        var service = sides("100.00", 20, "95.00", 20);
+        assertFalse(service.reconcile(withTolerance(new BigDecimal("0.04")), DATE.toString()).matched());
+
+        var countDrift = sides("100.00", 20, "100.00", 10);
+        var countResult = countDrift.reconcile(withTolerance(new BigDecimal("0.06")), DATE.toString());
+        assertFalse(countResult.matched());
+        assertEquals("MISMATCH", verdict(countResult, "east"));
+
+        var missing = new RealtimeAdsQueryService(null, null) {
+            @Override
+            Table resolve(String assetId) { return new Table("ds", "orders_serving", assetId); }
+
+            @Override
+            List<RegionSample> readRegions(Table table, Contract contract, LocalDate date, int limit) {
+                return "mt_realtime_ads".equals(table.table())
+                        ? List.of(new RegionSample("east", "100.00", 20, "2026-11-17T00:05:12.345"))
+                        : List.of(new RegionSample("west", "100.00", 20, "2026-11-17T00:05:12.345"));
+            }
+
+            @Override
+            EventProgress readEventProgress(Table table, Contract contract, LocalDate date) {
+                return progress("2026-11-17T00:05:13.000", 20);
+            }
+        };
+        missing.useClock(NOW);
+        var missingResult = missing.reconcile(withTolerance(new BigDecimal("0.50")), DATE.toString());
+        assertFalse(missingResult.matched());
+        // 两个地区都只在单侧出现，吻合率为 0
+        assertEquals(0, BigDecimal.ZERO.compareTo(missingResult.matchRate()));
     }
 
     @Test
@@ -338,6 +393,100 @@ class RealtimeAdsQueryTest {
                 "Asia/Shanghai", "CNY", 60, 300, maxRows);
     }
 
+    private static RealtimeAdsQueryService.Contract withTolerance(BigDecimal tolerance) {
+        return new RealtimeAdsQueryService.Contract("mt_realtime_ads", "mt_batch_ads",
+                "Asia/Shanghai", "CNY", 60, 300, 100, 0, tolerance);
+    }
+
+    // ---------------------------------------------------------------- 通用列映射
+
+    /** 默认口径不变：存量版本仍读 region/gmv_cents/paid_order_count 与 <表>_events。 */
+    @Test
+    void defaultMappingKeepsRegionGmvContract() {
+        String sql = RealtimeAdsQueryService.regionSql(new RealtimeAdsQueryService.Table("ds", "analytics", "orders_serving"),
+                CONTRACT, DATE, 101);
+
+        assertTrue(sql.contains("`region` AS region"));
+        assertTrue(sql.contains("`gmv_cents` / 100"));
+        assertTrue(sql.contains("`paid_order_count` AS order_count"));
+        assertTrue(sql.contains("ORDER BY `region` LIMIT 101"));
+        String progress = RealtimeAdsQueryService.progressSql(
+                new RealtimeAdsQueryService.Table("ds", "analytics", "orders_serving"), CONTRACT, DATE);
+        assertTrue(progress.contains("`orders_serving_events`"));
+    }
+
+    /** 换一套列名和推进表后，SQL 完全由配置驱动，不需要改 Java。 */
+    @Test
+    void buildsSqlFromConfiguredColumnsAndProgressTable() {
+        var contract = new RealtimeAdsQueryService.Contract("asset", null, "Asia/Shanghai", "CNY", 60, 300, 100,
+                0, null, RealtimeAdsQueryService.Mapping.of("city", "amount_yuan", "order_cnt", "seen_at",
+                        "stat_date", 1, "ads_city_progress", "stat_date", "advanced_at", "cnt", "max_ts"));
+        String sql = RealtimeAdsQueryService.regionSql(
+                new RealtimeAdsQueryService.Table("ds", "analytics", "ads_city_day"), contract, DATE, 50);
+
+        assertTrue(sql.contains("`city` AS region"));
+        assertTrue(sql.contains("`amount_yuan` AS DECIMAL(18,2)"));
+        assertFalse(sql.contains("/ 100"));
+        assertTrue(sql.contains("`order_cnt` AS order_count"));
+        assertTrue(sql.contains("`seen_at`"));
+        assertTrue(sql.contains("ORDER BY `city` LIMIT 50"));
+
+        String progress = RealtimeAdsQueryService.progressSql(
+                new RealtimeAdsQueryService.Table("ds", "analytics", "ads_city_day"), contract, DATE);
+        assertTrue(progress.contains("`ads_city_progress`"));
+        assertTrue(progress.contains("`cnt` AS event_count"));
+        assertTrue(progress.contains("`max_ts`"));
+    }
+
+    /** 部分字段留空时按字段回落默认，不产生「配置了一半」的契约。 */
+    @Test
+    void partiallyConfiguredMappingFallsBackPerField() {
+        var mapping = RealtimeAdsQueryService.Mapping.of("city", null, null, null, null, null,
+                null, null, null, null, null);
+
+        assertEquals("city", mapping.keyColumn());
+        assertEquals("gmv_cents", mapping.valueColumn());
+        assertEquals("paid_order_count", mapping.countColumn());
+        assertEquals("observed_at", mapping.observedColumn());
+        assertEquals(100, mapping.valueDivisor());
+        assertNull(mapping.progressTable());
+        assertEquals("advanced_at", mapping.progressAdvancedColumn());
+    }
+
+    /** 列名要直接拼进 SQL，非法标识符必须在调用前拒绝。 */
+    @Test
+    void rejectsIllegalMappingIdentifiers() {
+        var service = new RealtimeAdsQueryService(null, null);
+        var illegal = new RealtimeAdsQueryService.Contract("asset", null, "Asia/Shanghai", "CNY", 60, 300, 100,
+                0, null, RealtimeAdsQueryService.Mapping.of("region); DROP TABLE x; --", null, null, null,
+                        null, null, null, null, null, null, null));
+
+        assertThrows(BusinessException.class, () -> service.validate(illegal));
+    }
+
+    /** 构造一个实时侧与批侧金额/订单数不同的服务，用于验证容差判定。 */
+    private static RealtimeAdsQueryService sides(String realtimeGmv, long realtimeCount,
+                                                 String batchGmv, long batchCount) {
+        var service = new RealtimeAdsQueryService(null, null) {
+            @Override
+            Table resolve(String assetId) { return new Table("ds", "orders_serving", assetId); }
+
+            @Override
+            List<RegionSample> readRegions(Table table, Contract contract, LocalDate date, int limit) {
+                return "mt_realtime_ads".equals(table.table())
+                        ? List.of(new RegionSample("east", realtimeGmv, realtimeCount, "2026-11-17T00:05:12.345"))
+                        : List.of(new RegionSample("east", batchGmv, batchCount, "2026-11-17T00:05:12.345"));
+            }
+
+            @Override
+            EventProgress readEventProgress(Table table, Contract contract, LocalDate date) {
+                return progress("2026-11-17T00:05:13.000", realtimeCount);
+            }
+        };
+        service.useClock(NOW);
+        return service;
+    }
+
     private static RealtimeAdsQueryService service(List<RealtimeAdsQueryService.RegionSample> rows,
                                                    RealtimeAdsQueryService.EventProgress progress) {
         var service = new RealtimeAdsQueryService(null, null) {
@@ -347,12 +496,12 @@ class RealtimeAdsQueryTest {
             }
 
             @Override
-            List<RegionSample> readRegions(Table table, LocalDate date, int limit) {
+            List<RegionSample> readRegions(Table table, Contract contract, LocalDate date, int limit) {
                 return rows.size() > limit ? rows.subList(0, limit) : rows;
             }
 
             @Override
-            EventProgress readEventProgress(Table table, LocalDate date) {
+            EventProgress readEventProgress(Table table, Contract contract, LocalDate date) {
                 return progress;
             }
         };

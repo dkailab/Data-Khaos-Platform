@@ -3,6 +3,7 @@ package com.datakhaos.approval.service;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.datakhaos.approval.api.model.ApprovalEvidenceDto;
 import com.datakhaos.approval.dto.ApplyRequest;
 import com.datakhaos.approval.entity.AppApply;
 import com.datakhaos.approval.entity.AppApprovalFlow;
@@ -51,6 +52,7 @@ public class ApprovalService {
         apply.setApplicantId(applicantId);
         apply.setApplyType(request.getApplyType().toUpperCase());
         apply.setTargetId(request.getTargetId());
+        apply.setTargetRevision(request.getTargetRevision());
         apply.setTargetName(request.getTargetName());
         apply.setReason(request.getReason());
         apply.setStatus(0);
@@ -160,6 +162,38 @@ public class ApprovalService {
         return flowMapper.selectList(new LambdaQueryWrapper<AppApprovalFlow>()
                 .orderByAsc(AppApprovalFlow::getApplyType)
                 .orderByAsc(AppApprovalFlow::getStepOrder));
+    }
+
+    /**
+     * 查询目标版本最近一次通过的审批。
+     *
+     * <p>只认 {@code status=1} 且 {@code target_revision} 精确相等的申请：
+     * 审批后再次编辑会推进修订号，旧审批自然失效。查不到返回 null。</p>
+     */
+    public ApprovalEvidenceDto findApproved(String applyType, String targetId, Integer targetRevision) {
+        if (StrUtil.isBlank(applyType) || StrUtil.isBlank(targetId) || targetRevision == null) {
+            return null;
+        }
+        AppApply apply = applyMapper.selectOne(new LambdaQueryWrapper<AppApply>()
+                .eq(AppApply::getApplyType, applyType.strip().toUpperCase())
+                .eq(AppApply::getTargetId, targetId.strip())
+                .eq(AppApply::getTargetRevision, targetRevision)
+                .eq(AppApply::getStatus, 1)
+                .orderByDesc(AppApply::getUpdateTime)
+                .last("LIMIT 1"));
+        if (apply == null) {
+            return null;
+        }
+        AppApprovalRecord record = recordMapper.selectOne(new LambdaQueryWrapper<AppApprovalRecord>()
+                .eq(AppApprovalRecord::getApplyId, apply.getId())
+                .eq(AppApprovalRecord::getAction, 1)
+                .orderByDesc(AppApprovalRecord::getCreateTime)
+                .last("LIMIT 1"));
+        return new ApprovalEvidenceDto(apply.getId(), apply.getApplyType(), apply.getTargetId(),
+                apply.getTargetRevision(), apply.getApplicantId(),
+                record == null ? apply.getCurrentApprover() : record.getApproverId(),
+                record == null ? null : record.getCreateTime(),
+                record == null ? null : record.getComment());
     }
 
     // ---------- 私有方法 ----------

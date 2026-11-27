@@ -125,7 +125,8 @@ const detailVisible = ref(false)
 const detail = ref<{ apply: AppApply; records: AppApprovalRecord[] }>({ apply: {}, records: [] })
 
 function applyTypeText(t?: string) {
-  return { TABLE: '表权限', REPORT: '报表', DATASOURCE: '数据源', MENU: '菜单' }[t ?? ''] ?? t ?? '-'
+  return { TABLE: '表权限', REPORT: '报表', DATASOURCE: '数据源', MENU: '菜单',
+    WAREHOUSE_API: '数仓 API 版本', FLINK_JOB: '实时作业版本' }[t ?? ''] ?? t ?? '-'
 }
 
 function statusText(s?: number) {
