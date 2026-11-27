@@ -5,7 +5,8 @@ mkdir -p "$cache"
 cache=$(cd "$cache" && pwd)
 mkdir -p "$cache/sql"
 maven=https://repo.maven.apache.org/maven2
-apache=https://archive.apache.org/dist/flink/flink-cdc-3.6.0
+cdn=https://dlcdn.apache.org/flink/flink-cdc-3.6.0
+archive_site=https://archive.apache.org/dist/flink/flink-cdc-3.6.0
 archive=flink-cdc-3.6.0-1.20-bin.tar.gz
 
 download() {
@@ -28,7 +29,7 @@ download() {
 }
 
 if [[ ! -r "$cache/cdc/bin/flink-cdc.sh" ]]; then
-  download "$apache/$archive" "$cache/$archive" 512
+  download "$cdn/$archive" "$cache/$archive" 512 || download "$archive_site/$archive" "$cache/$archive" 512
   staging=$(mktemp -d "$cache/cdc.XXXXXX")
   tar -xzf "$cache/$archive" -C "$staging" --strip-components=1
   chmod 0755 "$staging"
@@ -42,4 +43,11 @@ done
 download "$maven/org/apache/flink/flink-sql-connector-kafka/3.4.0-1.20/flink-sql-connector-kafka-3.4.0-1.20.jar" "$cache/sql/kafka.jar" 1
 download "$maven/org/apache/flink/flink-connector-jdbc/3.3.0-1.20/flink-connector-jdbc-3.3.0-1.20.jar" "$cache/sql/jdbc.jar" 1
 download "$maven/com/mysql/mysql-connector-j/8.3.0/mysql-connector-j-8.3.0.jar" "$cache/sql/mysql.jar" 1
+# Flink CDC discovers its CLI dependencies by scanning cdc/lib for regular JAR files.
+cdc_mysql="$cache/cdc/lib/mysql-connector-j-8.3.0.jar"
+if ! cmp -s "$cache/sql/mysql.jar" "$cdc_mysql"; then
+  pending=$(mktemp "$cdc_mysql.XXXXXX")
+  install -m 0644 "$cache/sql/mysql.jar" "$pending"
+  mv -f "$pending" "$cdc_mysql"
+fi
 printf '%s\n' "$cache"

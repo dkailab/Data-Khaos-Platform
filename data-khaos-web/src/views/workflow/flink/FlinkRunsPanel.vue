@@ -4,10 +4,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import DkButton from '@/paas-ui/DkButton.vue'
 import FlinkCheckpointDialog from './FlinkCheckpointDialog.vue'
 import FlinkMetricsDialog from './FlinkMetricsDialog.vue'
-import { cancelFlinkRun, listFlinkRuns, refreshFlinkRun, resumeFlinkRun, stopFlinkRun, submitFlinkRun } from '@/api/flinkStudio'
+import { cancelFlinkRun, listFlinkRuns, refreshFlinkRun, resumeFlinkRun, stopFlinkRun, submitFlinkRun, validateFlinkSql } from '@/api/flinkStudio'
 import type { FlinkRun, FlinkRunState } from '@/api/flinkStudio'
 
-const props = defineProps<{ project: string; assetId: string; version: number; canRun: boolean; jarJob?: boolean; streaming: boolean }>()
+const props = defineProps<{ project: string; assetId: string; version: number; canRun: boolean; jarJob?: boolean; streaming: boolean; hideLaunchActions?: boolean }>()
 const runs = ref<FlinkRun[]>([])
 const enabled = ref(false)
 const total = ref(0)
@@ -16,6 +16,9 @@ const size = 10
 const loading = ref(false)
 const working = ref(false)
 const error = ref('')
+const validation = ref('')
+const validating = ref(false)
+let validationSequence = 0
 const checkpointRun = ref<string>()
 const metricsRun = ref<string>()
 let sequence = 0
@@ -62,8 +65,26 @@ async function load() {
   }
 }
 
+async function validateSql() {
+  if (props.jarJob || !enabled.value || validating.value || working.value) return
+  const attempt = ++validationSequence
+  validating.value = true
+  validation.value = ''
+  error.value = ''
+  try {
+    const result = await validateFlinkSql(props.project, props.assetId, props.version)
+    if (attempt === validationSequence) {
+      validation.value = `v${result.version} 通过 Flink 校验 · ${result.statementCount} 条语句`
+    }
+  } catch (e) {
+    if (attempt === validationSequence) error.value = e instanceof Error ? e.message : 'Flink SQL 校验失败'
+  } finally {
+    if (attempt === validationSequence) validating.value = false
+  }
+}
+
 async function submit() {
-  if (working.value || !enabled.value || !props.canRun) return
+  if (working.value || validating.value || !enabled.value || !props.canRun) return
   const version = props.version
   try {
     await ElMessageBox.confirm(`提交 v${version} 到绑定的 Flink 集群。`, '提交 Flink 作业', {
@@ -83,6 +104,7 @@ async function submit() {
     ElMessage.info(labels[saved.state])
     current.value = 1
     await load()
+    if (!closed && saved.state === 'FAILED' && saved.message) error.value = saved.message
   } catch (e) {
     if (!closed) error.value = e instanceof Error ? e.message : '提交未确认，请重试同一请求'
   } finally {
@@ -138,13 +160,18 @@ async function update(row: FlinkRun, action: 'refresh' | 'cancel' | 'stop') {
   }
 }
 
-watch(() => props.version, () => { requestId = '' })
+watch([() => props.project, () => props.assetId, () => props.version], () => {
+  requestId = ''
+  validationSequence++
+  validating.value = false
+  validation.value = ''
+})
 watch([() => props.project, () => props.assetId], () => {
   checkpointRun.value = undefined
   metricsRun.value = undefined
   void load()
 }, { immediate: true })
-onBeforeUnmount(() => { sequence++; closed = true })
+onBeforeUnmount(() => { sequence++; validationSequence++; closed = true })
 </script>
 
 <template>
@@ -152,11 +179,15 @@ onBeforeUnmount(() => { sequence++; closed = true })
     <header class="runs-actions">
       <h3>运行记录</h3>
       <DkButton :loading="loading" :disabled="working" @click="load">刷新列表</DkButton>
-      <DkButton variant="primary" :disabled="!enabled || !canRun || active || loading" :loading="working" @click="submit">
+      <DkButton v-if="!hideLaunchActions && !jarJob" :disabled="!enabled || loading || working" :loading="validating" @click="validateSql">
+        校验 SQL
+      </DkButton>
+      <DkButton v-if="!hideLaunchActions" variant="primary" :disabled="!enabled || !canRun || active || loading || validating" :loading="working" @click="submit">
         提交 v{{ version }}
       </DkButton>
     </header>
     <el-alert v-if="error" type="error" :title="error" :closable="false" show-icon />
+    <el-alert v-else-if="validation" type="success" :title="validation" :closable="false" show-icon />
     <p v-else-if="!loading && !enabled" class="runs-hint">{{ jarJob ? '当前项目尚未启用 JAR 提交，请核对集群绑定和已授权的 JAR ID。' : '当前项目未绑定 Flink 运行集群。' }}</p>
     <p v-else-if="!canRun" class="runs-hint">提交及取消需要项目调度权限。</p>
     <el-table v-loading="loading" :data="runs" row-key="id" empty-text="暂无作业运行">
@@ -178,7 +209,7 @@ onBeforeUnmount(() => { sequence++; closed = true })
           <el-button v-if="!terminal(row.state)" link type="primary" :disabled="working" @click="update(row, 'refresh')">刷新</el-button>
           <el-button v-if="canRun && ['SUBMITTED', 'CANCEL_REQUESTED'].includes(row.state) && row.engineJobId"
             link type="danger" :disabled="working" @click="update(row, 'cancel')">取消</el-button>
-          <el-button v-if="canRun && streaming && row.version === version && ['SUBMITTED', 'STOP_REQUESTED'].includes(row.state) && row.engineJobId"
+          <el-button v-if="canRun && streaming && row.version === version && (row.state === 'STOP_REQUESTED' || row.state === 'SUBMITTED' && row.engineState === 'RUNNING') && row.engineJobId"
             link type="primary" :disabled="working" @click="update(row, 'stop')">保存停机</el-button>
           <el-button v-if="canRun && enabled && row.recoverable" link type="primary" :disabled="working || active"
             @click="recover(row)">从断点恢复</el-button>

@@ -125,8 +125,8 @@ CREATE TABLE ads_region_day_events (
   'sink.buffer-flush.interval' = '1 s'
 );
 
-EXECUTE STATEMENT SET
-BEGIN
+-- SQL Client -f executes one statement at a time in this Flink release.
+BEGIN STATEMENT SET;
   INSERT INTO dwd_paid_orders SELECT * FROM dwd_paid;
   INSERT INTO dws_region_minute
     SELECT biz_date, minute_start, region, COUNT(*), SUM(CAST(amount_cents AS DECIMAL(38,0)))

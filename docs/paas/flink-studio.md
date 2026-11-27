@@ -41,13 +41,20 @@ SQL 作业的 `definition` 包含 `mode`（`STREAMING` 或 `BATCH`）、`paralle
 
 ## 发布与验收
 
-已有 MySQL 环境先执行 `db/migrate-flink-studio.sql`。入口为 **数据开发 → Flink 开发**。验收覆盖同项目作业与函数维护、并发编辑、跨项目拒绝、旧函数引用和历史恢复。
+已有 MySQL 环境先执行 `db/migrate-flink-studio.sql`。入口为 **作业开发 → 实时作业 → 实时 SQL 作业**。有界 SQL 从 **离线作业 → 批处理 SQL 作业** 进入。验收覆盖同项目作业与函数维护、并发编辑、跨项目拒绝、旧函数引用和历史恢复。
+
+SQL 编辑采用全屏工作台。左侧搜索项目下的实时和离线 SQL 作业，打开多个标签时分别保留内容和调试结果。设置面板管理并行度、固定函数版本和保存说明。历史区并排比较所选版本与当前工作稿，回滚会产生可追溯的新版本。临时脚本支持 SQL、Python、Shell、Java、Scala、JavaScript、JSON、YAML 和纯文本高亮。
+
+- **调试校验**在隔离的 SQL Gateway 会话检查草稿的准备语句与最终 INSERT 计划。
+- **执行选中**执行有界只读 SELECT，允许同选区带临时表或视图。需要运行权限，每次最多返回 100 行，结束时关闭调试会话。
+- **执行全部**提交已保存的完整版本，需要项目运行权限。执行反馈在底部运行记录中查看。
+
 
 离线对账样例使用 Flink 批模式读取固定时点的有界 MySQL 快照，复用流作业的支付、时区、金额与分组口径，写入独立对账表。流式结果和批结果逐键比对。 [实时数仓样例](realtime-warehouse.md)
 
 ## 手动提交与运行记录
 
-有开发和调度权限的项目成员可在作业历史中选择固定版本并提交。管理员通过部署配置将一个项目绑定到专用 SQL Gateway 和 JobManager REST。默认关闭。SQL Gateway 只接收该项目审核信任的开发人员提交的 SQL。专用运行环境使用独立身份、连接器、制品访问和网络范围。
+进入 **作业开发 → Flink SQL 作业**，可查看当前版本的运行，或从历史版本选择指定版本。具备项目开发和调度权限的成员可以提交运行。管理员通过部署配置将一个项目绑定到专用 SQL Gateway 和 JobManager REST。默认关闭。SQL Gateway 只接收该项目审核信任的开发人员提交的 SQL。专用运行环境使用独立身份、连接器、制品访问和网络范围。
 
 首版接收会话内的 `CREATE TEMPORARY TABLE/VIEW/FUNCTION`、受支持的 `SET` 和最后一条 `INSERT INTO`。在现有历史版本界面可查看运行记录、引擎 Job ID 和最新状态。集群绑定确认后，在 workflow 服务配置 `FLINK_RUN_PROJECT_ID`、`FLINK_RUN_SQL_GATEWAY`（如 `http://flink-sql-gateway:8083`）和 `FLINK_RUN_JOBMANAGER`（如 `http://flink-jobmanager:8081`）。先执行 `db/migrate-flink-deployment.sql`。
 
@@ -56,15 +63,34 @@ SQL 作业的 `definition` 包含 `mode`（`STREAMING` 或 `BATCH`）、`paralle
 | 方法 | 输入与结果 |
 | --- | --- |
 | `GET /runs` | 分页查看作业版本、提交人、状态和引擎 Job ID，返回项目提交功能是否启用。 |
+| `POST /versions/{version}/validate` | 由项目数据开发成员校验已保存的 SQL 版本。成功返回版本、执行模式和脚本语句数。 |
 | `POST /versions/{version}/runs` | 请求体 `requestId` 为 UUID。先登记运行，同键同版本重试复用原记录。同一作业只允许一条未终止运行。 |
 | `POST /runs/{runId}/refresh` | 按已知 Job ID 或唯一运行名称回查并记录状态。 |
 | `POST /runs/{runId}/cancel` | 向已确认的引擎 Job ID 发送取消请求，再通过刷新确认终态。 |
 
 提交前准备失败可以新开请求。发送 INSERT 后结果不明确时进入待核查，保留活动运行锁，通过集群回查补齐。引擎失联时保留上一次确认的状态。集群地址配置变化后，已有运行需要恢复原绑定才能继续处置。定时调度、发布审批和批次参数留在后续交付。 [SQL Gateway REST](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql-gateway/rest/) · [JobManager REST](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/rest_api/)
 
+### 上线前校验与真实引擎验收
+
+在作业的「查看运行」里点「校验 SQL」。平台按该版本登记临时表、视图和函数，再让项目绑定的 Flink SQL Gateway 编译最后一条 `INSERT` 的执行计划。独立校验使用独立会话，不提交作业或写入目标表。正式提交也执行同一检查。引擎拒绝 SQL 时会指出脚本中失败的准备语句或最终 INSERT，运行记为失败并释放活动锁。通过校验后，提交仍会受运行时连接、权限、资源和保存点状态影响。引擎响应丢失后的提交继续保留待核查状态，避免重复写入。 [Flink EXPLAIN](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/explain/)
+
+在 Flink 1.20.3 的隔离环境验证错误 SQL、有效版本提交、检查点、保存停机和同版本恢复。下面的 Compose 使用已有镜像，无需重新构建平台或启动 MySQL、Kafka 和 Nacos。首次使用需要本机已有 `flink:1.20.3-scala_2.12-java17` 镜像。从仓库根目录运行：
+
+```bash
+docker compose -p dk-flink-prodcheck -f examples/realtime-orders/compose.platform-check.yml up -d --no-build
+dk_flink_jm=$(docker compose -p dk-flink-prodcheck -f examples/realtime-orders/compose.platform-check.yml port jobmanager 8081)
+dk_flink_sql=$(docker compose -p dk-flink-prodcheck -f examples/realtime-orders/compose.platform-check.yml port sql-gateway 8083)
+curl -fsS --retry 10 --retry-connrefused "http://$dk_flink_sql/v2/info"
+DK_FLINK_SQL_GATEWAY="http://$dk_flink_sql" DK_FLINK_JOBMANAGER="http://$dk_flink_jm" \
+  mvn -o -B -pl data-khaos-workflow -am -Dtest=FlinkSqlDeliveryTest -Dsurefire.failIfNoSpecifiedTests=false test
+docker compose -p dk-flink-prodcheck -f examples/realtime-orders/compose.platform-check.yml down -v
+```
+
+测试走平台作业版本及运行服务，运行记录落 H2，连接真实 Flink SQL Gateway 和 JobManager。使用内置数据生成器与 BlackHole 目标验证控制面。订单 CDC 到 MySQL ADS 的数据验收使用单独的订单数仓样例。样例的多目标语句集通过 Flink SQL Client 执行，当前工作台提交契约覆盖单条 INSERT。 [订单数仓验收](realtime-warehouse.md)
+
 ### 保存停机与断点恢复
 
-正在运行的流作业可选择「保存停机」。JobManager 写入 canonical savepoint 并停止旧作业，平台确认保存点和终态后释放活动运行锁。停机采用 `drain=false`，保留未触发的事件时间窗口计时器。发起需要项目开发与调度权限，重复请求沿用同一引擎触发 ID。JobManager 与 TaskManager 使用双方可读写的 `execution.checkpointing.savepoint-dir`。
+正在运行的流作业可选择「保存停机」。JobManager 写入 canonical savepoint 并停止旧作业，平台确认保存点和终态后释放活动运行锁。停机采用 `drain=false`，保留未触发的事件时间窗口计时器。发起需要项目开发与调度权限。平台先检查引擎处于 RUNNING 且执行任务已就绪，重复请求沿用同一引擎触发 ID。JobManager 与 TaskManager 使用双方可读写的 `execution.checkpointing.savepoint-dir`。
 
 | 操作 | 接口 |
 | --- | --- |
@@ -87,9 +113,9 @@ SQL 作业的 `definition` 包含 `mode`（`STREAMING` 或 `BATCH`）、`paralle
 
 ### 函数库与 JAR 作业
 
-进入 **数据开发 → Flink 开发 → 函数库**，登记标量函数 `UDF`、表值函数 `UDTF` 或聚合函数 `UDAF`。分类随版本保存，历史未分类函数可以在下一版补录。标量函数返回一个值，表值函数可通过 `LATERAL TABLE` 展开为多行，聚合函数按组计算。Flink 根据 JVM 实现类解析 SQL 签名和类型，平台保存登记信息。SQL 作业继续绑定具体函数版本。 [Flink SQL 自定义函数](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/functions/udfs/)
+进入 **作业开发 → 函数库**，登记标量函数 `UDF`、表值函数 `UDTF` 或聚合函数 `UDAF`。分类随版本保存，历史未分类函数可以在下一版补录。标量函数返回一个值，表值函数可通过 `LATERAL TABLE` 展开为多行，聚合函数按组计算。Flink 根据 JVM 实现类解析 SQL 签名和类型，平台保存登记信息。SQL 作业继续绑定具体函数版本。 [Flink SQL 自定义函数](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/functions/udfs/)
 
-进入 **Flink 开发 → JAR 作业** 新建版本，填写集群 JAR ID、入口类、流批模式、并行度和逐项启动参数。API 使用 `kind=JAR_JOB`，定义为 `{mode, parallelism, jarJob: {jarId, entryClass, arguments}}`。首期运行 Flink REST 可接受的单作业 JAR。运行模式与并行度由平台作为默认配置提交，应用代码显式设置可以覆盖。作业版本和运行记录复用已有表，无额外数据库迁移。
+进入 **作业开发 → JAR 作业** 新建版本，填写集群 JAR ID、入口类、流批模式、并行度和逐项启动参数。API 使用 `kind=JAR_JOB`，定义为 `{mode, parallelism, jarJob: {jarId, entryClass, arguments}}`。首期运行 Flink REST 可接受的单作业 JAR。运行模式与并行度由平台作为默认配置提交，应用代码显式设置可以覆盖。作业版本和运行记录复用已有表，无额外数据库迁移。
 
 部署时由管理员向绑定的 Flink JobManager 上传经过审核的、带版本的 JAR，从 `GET /jars` 获取制品 ID，并在 workflow 服务配置 `FLINK_RUN_ALLOWED_JARS`，多个 ID 以逗号分隔。配置 `FLINK_RUN_PROJECT_ID` 与 `FLINK_RUN_JOBMANAGER` 即可运行 JAR 作业，SQL 作业另需 SQL Gateway。JAR 更换或重新上传会生成新 ID，应保存为新作业版本。需重放的旧版 JAR 要保留在集群的上传目录内。启动参数随版本保存，凭据通过运行环境注入。 [Flink JAR 上传与运行接口](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/rest_api/#jarsjaridrun)
 

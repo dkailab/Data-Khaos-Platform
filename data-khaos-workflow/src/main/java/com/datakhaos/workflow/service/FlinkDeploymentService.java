@@ -44,7 +44,8 @@ import java.util.UUID;
 public class FlinkDeploymentService {
     private static final String DEVELOP = "task:develop";
     private static final String SCHEDULE = "task:schedule";
-    private static final Duration SUBMIT_BUDGET = Duration.ofSeconds(22);
+    private static final Duration PREPARE_BUDGET = Duration.ofSeconds(22);
+    private static final Duration DISPATCH_BUDGET = Duration.ofSeconds(12);
 
     private final FlinkDeploymentMapper runs;
     private final FlinkAssetMapper assets;
@@ -71,6 +72,67 @@ public class FlinkDeploymentService {
                 .orderByDesc(FlinkDeployment::getCreateTime, FlinkDeployment::getId));
         return new RunPage(asset.getKind() == Kind.JAR_JOB ? runtime.jarEnabled(project) : runtime.enabled(project), PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(),
                 page.getRecords().stream().map(FlinkRunView::of).toList()));
+    }
+
+    public SqlValidation validateSql(String project, String assetId, int version) {
+        authorize(project, DEVELOP);
+        var job = studio.detail(project, assetId, version);
+        if (job.kind() != Kind.JOB) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "请选择 Flink SQL 作业版本");
+        }
+        requireSqlGateway(project);
+        FlinkRunSql script = FlinkRunSql.parse(studio.exportSql(project, job));
+        validateScript(script);
+        return new SqlValidation(version, job.definition().mode().name(), script.setup().size() + 1);
+    }
+
+    public int validateDraft(String project, FlinkDefinition definition) {
+        authorize(project, DEVELOP);
+        requireSqlGateway(project);
+        FlinkRunSql script = FlinkRunSql.parse(studio.renderDraftSql(project, definition));
+        validateScript(script);
+        return script.setup().size() + 1;
+    }
+
+    private void validateScript(FlinkRunSql script) {
+        String session = null;
+        long deadline = System.nanoTime() + PREPARE_BUDGET.toNanos();
+        try {
+            session = runtime.open("dk-flink-validate-" + UUID.randomUUID(), null);
+            prepareSql(session, script, deadline);
+        } catch (RuntimeFailure e) {
+            throw new BusinessException(e.statementRejected() ? ResultCode.VALIDATE_FAILED : ResultCode.SYSTEM_ERROR,
+                    e.getMessage());
+        } finally {
+            closeQuietly(session);
+        }
+    }
+
+    public FlinkRuntimeClient.Preview previewSelection(String project, String text) {
+        authorize(project, DEVELOP);
+        authorize(project, SCHEDULE);
+        requireSqlGateway(project);
+        var selection = FlinkRunSql.parseSelection(text);
+        String session = null;
+        long deadline = System.nanoTime() + PREPARE_BUDGET.toNanos();
+        try {
+            session = runtime.open("dk-flink-preview-" + UUID.randomUUID(), null);
+            runtime.awaitSetup(session, "SET 'execution.runtime-mode' = 'batch'", deadline);
+            runtime.awaitSetup(session, "SET 'parallelism.default' = '1'", deadline);
+            for (String statement : selection.setup()) runtime.awaitSetup(session, statement, deadline);
+            return runtime.preview(session, selection.query(), deadline);
+        } catch (RuntimeFailure e) {
+            throw new BusinessException(e.statementRejected() ? ResultCode.VALIDATE_FAILED : ResultCode.SYSTEM_ERROR,
+                    e.getMessage());
+        } finally {
+            closeQuietly(session);
+        }
+    }
+
+    private void requireSqlGateway(String project) {
+        if (!runtime.enabled(project)) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "当前项目未绑定 Flink SQL Gateway");
+        }
     }
 
     public FlinkRunView submit(String project, String assetId, int version, String inputKey) {
@@ -148,10 +210,10 @@ public class FlinkDeploymentService {
     private FlinkRunView execute(FlinkDeployment run, FlinkRunSql script, String recoveryPath) {
         String session = null;
         boolean close = true;
-        long deadline = System.nanoTime() + SUBMIT_BUDGET.toNanos();
+        long deadline = System.nanoTime() + PREPARE_BUDGET.toNanos();
         try {
             session = runtime.open(engineName(run), recoveryPath);
-            for (String statement : script.setup()) runtime.awaitSetup(session, statement, deadline);
+            prepareSql(session, script, deadline);
             runtime.awaitSetup(session, "SET 'pipeline.name' = '" + engineName(run) + "'", deadline);
             if (!transition(run, State.SUBMITTING, null, null, null)) return reload(run);
 
@@ -159,7 +221,7 @@ public class FlinkDeploymentService {
             run.setState(State.SUBMITTING);
             run.setRowVersion(run.getRowVersion() + 1);
             close = false;
-            Optional<String> jobId = runtime.insert(session, script.insert(), deadline);
+            Optional<String> jobId = runtime.insert(session, script.insert(), System.nanoTime() + DISPATCH_BUDGET.toNanos());
             if (jobId.isPresent()) {
                 close = true;
                 transition(run, State.SUBMITTED, jobId.get(), null, null);
@@ -173,15 +235,33 @@ public class FlinkDeploymentService {
                 transition(run, State.RECONCILING, null, null, "Flink 提交结果待确认，请刷新运行");
             }
         } finally {
-            if (session != null && close) {
-                try {
-                    runtime.close(session);
-                } catch (RuntimeFailure ignored) {
-                    // The gateway expires idle sessions. The persisted run state remains authoritative.
-                }
-            }
+            if (close) closeQuietly(session);
         }
         return reload(run);
+    }
+
+    private void prepareSql(String session, FlinkRunSql script, long deadline) {
+        for (int i = 0; i < script.setup().size(); i++) {
+            try {
+                runtime.awaitSetup(session, script.setup().get(i), deadline);
+            } catch (RuntimeFailure e) {
+                throw new RuntimeFailure("运行脚本第 " + (i + 1) + " 条准备语句失败：" + e.getMessage(), e.statementRejected());
+            }
+        }
+        try {
+            runtime.awaitInsertPlan(session, script.insert(), deadline);
+        } catch (RuntimeFailure e) {
+            throw new RuntimeFailure("运行脚本第 " + (script.setup().size() + 1) + " 条 INSERT 校验失败：" + e.getMessage(), e.statementRejected());
+        }
+    }
+
+    private void closeQuietly(String session) {
+        if (session == null) return;
+        try {
+            runtime.close(session);
+        } catch (RuntimeFailure ignored) {
+            // The gateway expires idle sessions. The persisted run state remains authoritative.
+        }
     }
 
     public FlinkRunView refresh(String project, String assetId, String id) {
@@ -209,7 +289,8 @@ public class FlinkDeploymentService {
                     case "CANCELED" -> State.CANCELED;
                     default -> run.getState() == State.CANCEL_REQUESTED ? State.CANCEL_REQUESTED : State.SUBMITTED;
                 };
-                transition(run, state, job.id(), job.status(), null);
+                String message = state == State.SUBMITTED && run.getState() == State.SUBMITTED ? run.getMessage() : null;
+                transition(run, state, job.id(), job.status(), message);
             } else if (run.getState() == State.SUBMITTING
                     && run.getUpdateTime().isBefore(LocalDateTime.now().minusMinutes(2))) {
                 transition(run, State.RECONCILING, null, null, "Flink 提交结果待确认，请刷新运行");
@@ -370,6 +451,13 @@ public class FlinkDeploymentService {
         }
         String trigger = run.getSavepointTriggerId();
         if (run.getState() == State.SUBMITTED) {
+            try {
+                if (!runtime.readyToStop(run.getEngineJobId())) {
+                    throw new BusinessException(409, "作业任务尚未全部就绪，请稍后重试保存停机");
+                }
+            } catch (RuntimeFailure e) {
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "无法确认作业任务状态，请刷新后重试");
+            }
             trigger = UUID.randomUUID().toString().replace("-", "");
             if (!update(run, State.STOP_REQUESTED, run.getEngineJobId(), run.getEngineState(), null, trigger, null)) {
                 return reload(run);
@@ -497,6 +585,8 @@ public class FlinkDeploymentService {
     private String engineName(FlinkDeployment run) {
         return "dk-flink-" + run.getId();
     }
+
+    public record SqlValidation(int version, String mode, int statementCount) {}
 
     public record RunPage(boolean enabled, PageResult<FlinkRunView> page) {}
 }

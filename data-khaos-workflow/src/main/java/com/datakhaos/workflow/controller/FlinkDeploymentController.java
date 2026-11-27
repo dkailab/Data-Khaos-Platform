@@ -13,6 +13,9 @@ import com.datakhaos.workflow.runner.FlinkPressureMonitor;
 import com.datakhaos.workflow.runner.FlinkKafkaMonitor;
 import com.datakhaos.workflow.runner.FlinkEventTimeMonitor;
 import com.datakhaos.workflow.service.FlinkDeploymentService.RunPage;
+import com.datakhaos.workflow.service.FlinkDeploymentService.SqlValidation;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpHeaders;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,6 +37,13 @@ public class FlinkDeploymentController {
                            @RequestParam(defaultValue = "1") long current,
                            @RequestParam(defaultValue = "10") long size) {
         return R.ok(runs.page(projectId, id, current, size));
+    }
+
+    @PostMapping("/versions/{version}/validate")
+    public R<SqlValidation> validate(@PathVariable String projectId, @PathVariable String id, @PathVariable int version,
+                                     HttpServletResponse response) {
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+        return R.ok(runs.validateSql(projectId, id, version));
     }
 
     @PostMapping("/versions/{version}/runs")

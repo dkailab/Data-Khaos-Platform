@@ -13,7 +13,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -122,30 +124,39 @@ public class FlinkRuntimeClient {
                 Map.of("sessionName", name, "properties", properties)), "sessionHandle");
     }
 
-    public String execute(String session, String statement) {
+    private String execute(String session, String statement, long deadline) {
         return handle(call(sqlGateway, "POST", sessionPath(session) + "/statements",
-                Map.of("statement", statement)), "operationHandle");
+                Map.of("statement", statement), remaining(deadline)), "operationHandle");
     }
 
     public void awaitSetup(String session, String statement, long deadline) {
-        String operation = execute(session, statement);
+        awaitStatement(session, statement, deadline, "Flink 未通过准备语句校验");
+    }
+
+    public void awaitInsertPlan(String session, String insert, long deadline) {
+        awaitStatement(session, "EXPLAIN PLAN FOR " + insert, deadline, "Flink 无法生成 INSERT 执行计划");
+    }
+
+    private void awaitStatement(String session, String statement, long deadline, String rejected) {
+        String operation = execute(session, statement, deadline);
         String path = sessionPath(session) + "/operations/" + operation + "/status";
         while (before(deadline)) {
-            String status = call(sqlGateway, "GET", path, null).path("status").asText();
+            String status = call(sqlGateway, "GET", path, null, remaining(deadline)).path("status").asText();
             if ("FINISHED".equals(status)) return;
+            if ("ERROR".equals(status)) throw new RuntimeFailure(rejected, true);
             if (!"RUNNING".equals(status) && !"PENDING".equals(status) && !"INITIALIZED".equals(status)) {
-                throw unavailable("Flink 未通过准备语句校验");
+                throw unavailable("Flink 返回非预期的 SQL 操作状态");
             }
             pause();
         }
-        throw unavailable("Flink 准备语句处理超时");
+        throw unavailable("Flink SQL 检查超时");
     }
 
     public Optional<String> insert(String session, String statement, long deadline) {
-        String operation = execute(session, statement);
+        String operation = execute(session, statement, deadline);
         String path = sessionPath(session) + "/operations/" + operation + "/result/0?rowFormat=JSON";
         while (before(deadline)) {
-            JsonNode result = call(sqlGateway, "GET", path, null);
+            JsonNode result = call(sqlGateway, "GET", path, null, remaining(deadline));
             String id = result.path("jobID").asText();
             if (!JOB_ID.matcher(id).matches()) {
                 id = result.path("results").path("data").path(0).path("fields").path(0).asText();
@@ -156,6 +167,62 @@ public class FlinkRuntimeClient {
         }
         return Optional.empty();
     }
+
+    public Preview preview(String session, String query, long deadline) {
+        var columns = new ArrayList<String>();
+        var rows = new ArrayList<List<JsonNode>>();
+        String operation = sessionPath(session) + "/operations/" + execute(session,
+                "SELECT * FROM (" + query + ") AS dk_preview LIMIT 101", deadline);
+        int page = 0;
+        boolean ended = false;
+        try {
+            while (before(deadline)) {
+                JsonNode result = call(sqlGateway, "GET", operation + "/result/" + page + "?rowFormat=JSON",
+                        null, remaining(deadline));
+                JsonNode payload = result.path("results");
+                if (columns.isEmpty()) {
+                    for (JsonNode column : payload.path("columns")) columns.add(column.path("name").asText());
+                    if (columns.size() > 80) throw unavailable("调试结果最多支持 80 列");
+                }
+                for (JsonNode row : payload.path("data")) {
+                    if (rows.size() == 100) return new Preview(columns, rows, true);
+                    var values = new ArrayList<JsonNode>();
+                    for (JsonNode value : row.path("fields")) values.add(previewCell(value));
+                    rows.add(values);
+                }
+                switch (result.path("resultType").asText()) {
+                    case "EOS":
+                        ended = true;
+                        return new Preview(columns, rows, false);
+                    case "PAYLOAD":
+                        page++;
+                        break;
+                    case "NOT_READY":
+                        pause();
+                        break;
+                    default:
+                        throw unavailable("Flink 未返回有效调试结果");
+                }
+            }
+            throw unavailable("查询调试超时，请缩小输入范围");
+        } finally {
+            if (!ended) {
+                try {
+                    call(sqlGateway, "POST", operation + "/cancel", Map.of());
+                } catch (RuntimeFailure ignored) {
+                    // The caller also closes the isolated gateway session.
+                }
+            }
+        }
+    }
+
+    private JsonNode previewCell(JsonNode node) {
+        if (node.isNull() || node.isBoolean() || node.isNumber()) return node;
+        String value = node.isTextual() ? node.asText() : node.toString();
+        return json.getNodeFactory().textNode(value.length() <= 2048 ? value : value.substring(0, 2048) + "…");
+    }
+
+    public record Preview(List<String> columns, List<List<JsonNode>> rows, boolean truncated) {}
 
     public void close(String session) {
         call(sqlGateway, "DELETE", sessionPath(session), null);
@@ -261,6 +328,24 @@ public class FlinkRuntimeClient {
         call(jobManager, "PATCH", "/jobs/" + id + "?mode=cancel", null);
     }
 
+    public boolean readyToStop(String id) {
+        JsonNode details = jobDetails(id);
+        if (!id.equals(details.path("jid").asText()) || !"RUNNING".equals(details.path("state").asText())) {
+            return false;
+        }
+        JsonNode vertices = details.path("vertices");
+        if (!vertices.isArray() || vertices.isEmpty()) return false;
+        boolean running = false;
+        for (JsonNode vertex : vertices) {
+            int parallelism = vertex.path("parallelism").asInt(0);
+            JsonNode tasks = vertex.path("tasks");
+            int started = tasks.path("RUNNING").asInt();
+            if (parallelism <= 0 || started + tasks.path("FINISHED").asInt() != parallelism) return false;
+            running |= started > 0;
+        }
+        return running;
+    }
+
     public void stopWithSavepoint(String id, String triggerId) {
         checkJobId(id);
         checkJobId(triggerId);
@@ -340,6 +425,12 @@ public class FlinkRuntimeClient {
         return text;
     }
 
+    private static Duration remaining(long deadline) {
+        long nanos = deadline - System.nanoTime();
+        if (nanos <= 0) throw unavailable("Flink SQL 操作超时");
+        return Duration.ofNanos(Math.min(nanos, Duration.ofSeconds(4).toNanos()));
+    }
+
     private static boolean before(long deadline) {
         return System.nanoTime() - deadline < 0;
     }
@@ -362,8 +453,19 @@ public class FlinkRuntimeClient {
     public record EngineJob(String id, String status) {}
 
     public static class RuntimeFailure extends RuntimeException {
+        private final boolean statementRejected;
+
         public RuntimeFailure(String message) {
+            this(message, false);
+        }
+
+        public RuntimeFailure(String message, boolean statementRejected) {
             super(message);
+            this.statementRejected = statementRejected;
+        }
+
+        public boolean statementRejected() {
+            return statementRejected;
         }
     }
 }

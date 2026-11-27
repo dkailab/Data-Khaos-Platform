@@ -5,9 +5,11 @@ import com.datakhaos.common.model.R;
 import com.datakhaos.workflow.entity.FlinkAsset;
 import com.datakhaos.workflow.entity.FlinkAsset.Kind;
 import com.datakhaos.workflow.flink.FlinkDefinition;
+import com.datakhaos.workflow.flink.FlinkRuntimeClient.Preview;
 import com.datakhaos.workflow.flink.FlinkVersionView;
 import com.datakhaos.workflow.flink.FlinkVersionView.Revision;
 import com.datakhaos.workflow.service.FlinkStudioService;
+import com.datakhaos.workflow.service.FlinkDeploymentService;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
@@ -26,12 +28,30 @@ import org.springframework.web.bind.annotation.RestController;
 public class FlinkStudioController {
     private final FlinkStudioService studio;
 
+    private final FlinkDeploymentService runs;
+
+    @PostMapping("/debug/validate")
+    public R<DraftValidation> validateDraft(@PathVariable String projectId, @RequestBody FlinkDefinition draft) {
+        return R.ok(new DraftValidation(runs.validateDraft(projectId, draft)));
+    }
+
+    @PostMapping("/debug/selection")
+    public R<Preview> previewSelection(@PathVariable String projectId, @RequestBody SelectionRequest request,
+                                       HttpServletResponse response) {
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+        return R.ok(runs.previewSelection(projectId, request.sql()));
+    }
+
+    public record SelectionRequest(String sql) {}
+    public record DraftValidation(int statementCount) {}
+
     @GetMapping
     public R<PageResult<FlinkAsset>> page(@PathVariable String projectId, @RequestParam Kind kind,
                                          @RequestParam(required = false) String keyword,
+                                         @RequestParam(required = false) FlinkDefinition.Mode mode,
                                          @RequestParam(defaultValue = "1") long current,
                                          @RequestParam(defaultValue = "15") long size) {
-        return R.ok(studio.page(projectId, kind, keyword, current, size));
+        return R.ok(studio.page(projectId, kind, keyword, mode, current, size));
     }
 
     @PostMapping

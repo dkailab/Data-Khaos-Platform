@@ -50,7 +50,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     key: 'dev',
-    title: '数据开发',
+    title: '作业开发',
     icon: 'EditPen',
     features: [
       { key: 'dev_project_workspace', title: '项目空间', path: '/project-workspace', icon: 'Folder' },
@@ -59,8 +59,8 @@ export const CATEGORIES: CategoryDef[] = [
       { key: 'dev_cron', title: '定时任务配置', path: '/schedule/job' },
       { key: 'dev_script', title: '数据脚本管理' },
       { key: 'dev_onesql', title: 'OneSQL 工作台', path: '/query/onesql' },
-      { key: 'dev_flink', title: 'Flink 开发', path: '/workflow/flink', icon: 'Cpu' },
-      { key: 'dev_workflow', title: '工作流编排', path: '/workflow/list', icon: 'Share' },
+      { key: 'dev_flink', title: '实时作业', path: '/jobs/realtime/sql', icon: 'Cpu' },
+      { key: 'dev_workflow', title: '离线作业', path: '/jobs/offline', icon: 'Share' },
       { key: 'dev_monitor', title: '任务监控' },
       { key: 'dev_version', title: '脚本版本管理' },
     ],

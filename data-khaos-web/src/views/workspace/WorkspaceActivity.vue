@@ -11,7 +11,7 @@ import type {
 
 import { createRequestId } from '@/utils/requestId'
 
-const props = defineProps<{ projectId: string; canRunPipeline: boolean; canSchedule: boolean }>()
+const props = defineProps<{ projectId: string; canRunPipeline: boolean; canSchedule: boolean; fixedKind?: ProjectActivityKind }>()
 const view = ref<'tasks' | 'runs' | 'alerts'>('tasks')
 const unacknowledgedOnly = ref(true)
 const kind = ref<ProjectActivityKind>()
@@ -126,7 +126,7 @@ function formatTime(value?: string) {
 
 async function load() {
   const id = ++requestId
-  const params = { current: current.value, size: pageSize, kind: view.value === 'alerts' ? 'WORKFLOW' as const : kind.value || undefined }
+  const params = { current: current.value, size: pageSize, kind: view.value === 'alerts' ? 'WORKFLOW' as const : props.fixedKind || kind.value || undefined }
   tasks.value = []
   runs.value = []
   total.value = 0
@@ -184,7 +184,7 @@ onBeforeUnmount(() => { requestId++; closeDetails() })
       <el-tab-pane name="alerts" label="任务告警" />
     </el-tabs>
     <form class="filters" @submit.prevent="search">
-      <el-select v-if="view !== 'alerts'" v-model="kind" clearable placeholder="全部类型" aria-label="任务类型" class="kind" @change="search">
+      <el-select v-if="view !== 'alerts' && !fixedKind" v-model="kind" clearable placeholder="全部类型" aria-label="任务类型" class="kind" @change="search">
         <el-option label="工作流" value="WORKFLOW" />
         <el-option label="管道" value="PIPELINE" />
       </el-select>
@@ -221,8 +221,11 @@ onBeforeUnmount(() => { requestId++; closeDetails() })
       <el-table-column label="更新时间" min-width="165">
         <template #default="{ row }">{{ formatTime(row.updatedAt) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="85">
-        <template #default="{ row }"><el-button link type="primary" @click="openDetails('tasks', row)">详情</el-button></template>
+      <el-table-column label="操作" :width="$slots['task-action'] ? 150 : 85">
+        <template #default="{ row }">
+          <el-button link type="primary" @click="openDetails('tasks', row)">详情</el-button>
+          <slot name="task-action" :task="row" />
+        </template>
       </el-table-column>
     </el-table>
     <el-table v-else v-loading="loading" :data="runs" :row-key="activityKey"

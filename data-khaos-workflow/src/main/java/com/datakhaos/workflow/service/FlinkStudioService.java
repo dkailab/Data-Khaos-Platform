@@ -47,7 +47,7 @@ public class FlinkStudioService {
     private final WorkflowProjectAccess access;
     private final ObjectMapper json;
 
-    public PageResult<FlinkAsset> page(String projectId, Kind kind, String keyword, long current, long size) {
+    public PageResult<FlinkAsset> page(String projectId, Kind kind, String keyword, FlinkDefinition.Mode mode, long current, long size) {
         authorize(projectId);
         validatePage(current, size);
         if (kind == null || (keyword != null && keyword.length() > 200)) {
@@ -55,6 +55,7 @@ public class FlinkStudioService {
         }
         var page = assets.selectPage(new Page<>(current, size), Wrappers.<FlinkAsset>lambdaQuery()
                 .eq(FlinkAsset::getProjectId, projectId).eq(FlinkAsset::getKind, kind)
+                .eq(mode != null, FlinkAsset::getCurrentMode, mode)
                 .and(keyword != null && !keyword.isBlank(), query -> query
                         .like(FlinkAsset::getName, keyword).or().like(FlinkAsset::getCode, keyword))
                 .orderByDesc(FlinkAsset::getUpdateTime, FlinkAsset::getId));
@@ -151,9 +152,16 @@ public class FlinkStudioService {
         if (job.kind() != Kind.JOB) {
             throw invalid("仅 SQL 作业版本可以导出 SQL");
         }
-        FlinkDefinition definition = job.definition();
+        return "-- Flink job " + job.code() + " v" + job.revision().version() + '\n'
+                + renderSql(projectId, job.definition());
+    }
+
+    String renderDraftSql(String projectId, FlinkDefinition definition) {
+        return renderSql(projectId, validate(projectId, Kind.JOB, definition));
+    }
+
+    private String renderSql(String projectId, FlinkDefinition definition) {
         var output = new StringBuilder()
-                .append("-- Flink job ").append(job.code()).append(" v").append(job.revision().version()).append('\n')
                 .append("SET 'execution.runtime-mode' = '")
                 .append(definition.mode().name().toLowerCase(Locale.ROOT)).append("';\n")
                 .append("SET 'parallelism.default' = '").append(definition.parallelism()).append("';\n");
