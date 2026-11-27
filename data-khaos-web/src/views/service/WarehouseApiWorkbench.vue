@@ -9,10 +9,11 @@ import type { ProjectWorkspace } from '@/api/project-group'
 import {
   createWarehouseApiDraft, editWarehouseApiDraft, invokeWarehouseApi, issueWarehouseApiCredential,
   listWarehouseApiCredentials, listWarehouseApis, offlineWarehouseApi, publishWarehouseApi,
-  revokeWarehouseApiCredential, warehouseApiDataUrl,
+  revokeWarehouseApiCredential, warehouseApiDataUrl, reconcileWarehouseApi,
 } from '@/api/warehouseApi'
 import type {
-  IssuedWarehouseCredential, OrderRegionGmv, WarehouseApiCredential, WarehouseApiVersion,
+  IssuedWarehouseCredential, OrderRegionGmv, RealtimeRegionGmv, RealtimeReconcile,
+  WarehouseApiCredential, WarehouseApiDataMode, WarehouseApiVersion,
 } from '@/api/warehouseApi'
 
 const route = useRoute()
@@ -58,6 +59,8 @@ function resetState() {
   credentials.value = []
   trialResult.value = undefined
   trialError.value = ''
+  reconcileResult.value = undefined
+  reconcileError.value = ''
   issued.value = undefined
 }
 
@@ -102,16 +105,33 @@ watch([projectId, currentPage], () => { void loadRows() }, { immediate: true })
 const draftDialog = ref(false)
 const draftMode = ref<'create' | 'edit'>('create')
 const draftSaving = ref(false)
-const draftForm = reactive({ apiCode: '', version: 1, name: '', maxRows: 100 })
+const draftForm = reactive({
+  apiCode: '', version: 1, name: '', maxRows: 100,
+  dataMode: 'BATCH' as WarehouseApiDataMode,
+  realtimeAssetId: '', realtimeBatchAssetId: '', observedTimezone: 'Asia/Shanghai', amountUnit: 'CNY',
+  freshnessFreshSeconds: 60, freshnessStaleSeconds: 300, quietSeconds: 0,
+})
 const editing = ref<WarehouseApiVersion>()
 
-function openCreate() {
-  draftMode.value = 'create'
-  editing.value = undefined
+function resetDraftForm() {
   draftForm.apiCode = ''
   draftForm.version = 1
   draftForm.name = ''
   draftForm.maxRows = 100
+  draftForm.dataMode = 'BATCH'
+  draftForm.realtimeAssetId = ''
+  draftForm.realtimeBatchAssetId = ''
+  draftForm.observedTimezone = 'Asia/Shanghai'
+  draftForm.amountUnit = 'CNY'
+  draftForm.freshnessFreshSeconds = 60
+  draftForm.freshnessStaleSeconds = 300
+  draftForm.quietSeconds = 0
+}
+
+function openCreate() {
+  draftMode.value = 'create'
+  editing.value = undefined
+  resetDraftForm()
   draftDialog.value = true
 }
 
@@ -126,7 +146,32 @@ function openEdit(row: WarehouseApiVersion) {
   draftForm.version = row.apiVersion
   draftForm.name = row.apiName
   draftForm.maxRows = row.maxRows
+  draftForm.dataMode = row.dataMode ?? 'BATCH'
+  draftForm.realtimeAssetId = row.realtimeAssetId ?? ''
+  draftForm.realtimeBatchAssetId = row.realtimeBatchAssetId ?? ''
+  draftForm.observedTimezone = row.observedTimezone ?? 'Asia/Shanghai'
+  draftForm.amountUnit = row.amountUnit ?? 'CNY'
+  draftForm.freshnessFreshSeconds = row.freshnessFreshSeconds ?? 60
+  draftForm.freshnessStaleSeconds = row.freshnessStaleSeconds ?? 300
+  draftForm.quietSeconds = row.quietSeconds ?? 0
   draftDialog.value = true
+}
+
+/** 草稿只提交 BATCH 字段或完整的实时契约；离线模式不携带实时字段，沿用后端默认。 */
+function draftPayload() {
+  const base = { name: draftForm.name.trim(), maxRows: draftForm.maxRows }
+  if (draftForm.dataMode === 'BATCH') return { ...base, dataMode: 'BATCH' as const }
+  return {
+    ...base,
+    dataMode: 'REALTIME' as const,
+    realtimeAssetId: draftForm.realtimeAssetId.trim(),
+    realtimeBatchAssetId: draftForm.realtimeBatchAssetId.trim() || undefined,
+    observedTimezone: draftForm.observedTimezone.trim() || 'Asia/Shanghai',
+    amountUnit: 'CNY',
+    freshnessFreshSeconds: draftForm.freshnessFreshSeconds,
+    freshnessStaleSeconds: draftForm.freshnessStaleSeconds,
+    quietSeconds: draftForm.quietSeconds,
+  }
 }
 
 async function submitDraft() {
@@ -137,15 +182,33 @@ async function submitDraft() {
     ElMessage.warning('API 编码需以小写字母开头，仅含小写字母、数字和连字符')
     return
   }
+  if (draftForm.dataMode === 'REALTIME') {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(draftForm.realtimeAssetId.trim())) {
+      ElMessage.warning('实时模式需要有效的实时 ADS 资产 ID')
+      return
+    }
+    if (draftForm.realtimeBatchAssetId.trim() && !/^[A-Za-z0-9_-]{1,64}$/.test(draftForm.realtimeBatchAssetId.trim())) {
+      ElMessage.warning('对账基线资产 ID 无效')
+      return
+    }
+    if (draftForm.freshnessStaleSeconds <= draftForm.freshnessFreshSeconds) {
+      ElMessage.warning('STALE 阈值须大于 FRESH 阈值')
+      return
+    }
+    if (draftForm.quietSeconds < 0 || draftForm.quietSeconds > 3600) {
+      ElMessage.warning('静默窗口需在 0 至 3600 秒之间')
+      return
+    }
+  }
   draftSaving.value = true
   try {
+    const payload = draftPayload()
     if (draftMode.value === 'create') {
-      await createWarehouseApiDraft(projectId.value, draftForm.apiCode.trim(), draftForm.version,
-        { name, maxRows: draftForm.maxRows })
+      await createWarehouseApiDraft(projectId.value, draftForm.apiCode.trim(), draftForm.version, payload)
       ElMessage.success('草稿已创建')
     } else if (editing.value) {
       await editWarehouseApiDraft(projectId.value, editing.value.apiCode, editing.value.apiVersion,
-        editing.value.revision, { name, maxRows: draftForm.maxRows })
+        editing.value.revision, payload)
       ElMessage.success('草稿已更新')
     }
     draftDialog.value = false
@@ -193,8 +256,23 @@ const credentials = ref<WarehouseApiCredential[]>([])
 const credLoading = ref(false)
 const trialBizDate = ref('')
 const trialLoading = ref(false)
-const trialResult = ref<OrderRegionGmv>()
+const trialResult = ref<OrderRegionGmv | RealtimeRegionGmv>()
 const trialError = ref('')
+const reconcileResult = ref<RealtimeReconcile>()
+const reconcileLoading = ref(false)
+const reconcileError = ref('')
+
+/** dataMode 由后端返回体判别，避免前端依赖版本列表的字段是否齐全 */
+function isRealtime(result: OrderRegionGmv | RealtimeRegionGmv): result is RealtimeRegionGmv {
+  return (result as RealtimeRegionGmv).dataMode === 'REALTIME'
+}
+
+const stateText: Record<string, string> = {
+  PRODUCED: '已产出', EMPTY: '确无成交', NOT_YET_PRODUCED: '尚未产出', IN_PROGRESS: '写入中',
+}
+const freshnessText: Record<string, string> = {
+  FRESH: '新鲜', LAGGING: '滞后', STALE: '过期', UNKNOWN: '未知',
+}
 
 async function openDetail(row: WarehouseApiVersion) {
   selected.value = row
@@ -202,6 +280,8 @@ async function openDetail(row: WarehouseApiVersion) {
   trialResult.value = undefined
   trialError.value = ''
   trialBizDate.value = ''
+  reconcileResult.value = undefined
+  reconcileError.value = ''
   detailDialog.value = true
   await loadCredentials()
 }
@@ -242,6 +322,8 @@ async function runTrial() {
   trialLoading.value = true
   trialError.value = ''
   trialResult.value = undefined
+  reconcileResult.value = undefined
+  reconcileError.value = ''
   try {
     trialResult.value = await invokeWarehouseApi(projectId.value, selected.value.apiCode,
       selected.value.apiVersion, trialBizDate.value)
@@ -249,6 +331,25 @@ async function runTrial() {
     trialError.value = error instanceof Error ? error.message : '试跑失败'
   } finally {
     trialLoading.value = false
+  }
+}
+
+async function runReconcile() {
+  if (!selected.value) return
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trialBizDate.value)) {
+    ElMessage.warning('请填写 YYYY-MM-DD 格式的业务日期')
+    return
+  }
+  reconcileLoading.value = true
+  reconcileError.value = ''
+  reconcileResult.value = undefined
+  try {
+    reconcileResult.value = await reconcileWarehouseApi(projectId.value, selected.value.apiCode,
+      selected.value.apiVersion, trialBizDate.value)
+  } catch (error) {
+    reconcileError.value = error instanceof Error ? error.message : '对账失败'
+  } finally {
+    reconcileLoading.value = false
   }
 }
 
@@ -377,6 +478,13 @@ void loadProjects()
           </el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="模式" width="90">
+        <template #default="{ row }">
+          <el-tag :type="row.dataMode === 'REALTIME' ? 'warning' : 'info'" size="small" effect="plain">
+            {{ row.dataMode === 'REALTIME' ? '实时' : '离线' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="最大行数" width="100">
         <template #default="{ row }">{{ row.maxRows }}</template>
       </el-table-column>
@@ -409,7 +517,8 @@ void loadProjects()
     </div>
 
     <!-- 草稿新建 / 编辑 -->
-    <el-dialog v-model="draftDialog" :title="draftMode === 'create' ? '新建 API 草稿' : '编辑草稿'" width="520px">
+    <el-dialog v-model="draftDialog" :title="draftMode === 'create' ? '新建 API 草稿' : '编辑草稿'" width="640px"
+      destroy-on-close>
       <el-form label-width="110px">
         <el-form-item label="API 编码">
           <el-input v-model="draftForm.apiCode" :disabled="draftMode === 'edit'" placeholder="如 order-region-gmv" />
@@ -423,6 +532,36 @@ void loadProjects()
         <el-form-item label="最大返回行数">
           <el-input-number v-model="draftForm.maxRows" :min="1" :max="100" />
         </el-form-item>
+        <el-form-item label="数据模式">
+          <el-radio-group v-model="draftForm.dataMode">
+            <el-radio value="BATCH">离线（分区发布）</el-radio>
+            <el-radio value="REALTIME">实时（ADS 观测时间）</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <template v-if="draftForm.dataMode === 'REALTIME'">
+          <el-divider content-position="left">实时契约</el-divider>
+          <el-form-item label="实时 ADS 资产">
+            <el-input v-model="draftForm.realtimeAssetId" placeholder="如 mt_rt_ads_region_day" />
+          </el-form-item>
+          <el-form-item label="对账基线资产">
+            <el-input v-model="draftForm.realtimeBatchAssetId" placeholder="批 ADS 资产 ID，可选" />
+          </el-form-item>
+          <el-form-item label="观测时区">
+            <el-input v-model="draftForm.observedTimezone" placeholder="Asia/Shanghai" />
+          </el-form-item>
+          <el-form-item label="FRESH 阈值">
+            <el-input-number v-model="draftForm.freshnessFreshSeconds" :min="1" :max="86400" />
+            <span class="hint">秒</span>
+          </el-form-item>
+          <el-form-item label="STALE 阈值">
+            <el-input-number v-model="draftForm.freshnessStaleSeconds" :min="1" :max="86400" />
+            <span class="hint">秒，须大于 FRESH</span>
+          </el-form-item>
+          <el-form-item label="静默窗口">
+            <el-input-number v-model="draftForm.quietSeconds" :min="0" :max="3600" />
+            <span class="hint">秒，0=关闭；作业刚推进时返回 IN_PROGRESS</span>
+          </el-form-item>
+        </template>
       </el-form>
       <el-alert
         v-if="draftMode === 'edit'"
@@ -455,12 +594,16 @@ void loadProjects()
         <div class="trial-row">
           <el-input v-model="trialBizDate" placeholder="业务日期 YYYY-MM-DD" style="width: 220px" />
           <el-button type="primary" :loading="trialLoading" @click="runTrial">试跑</el-button>
-          <span class="hint">试跑以当前登录身份执行，只读取已发布且质量通过的受管物化结果。</span>
+          <el-button v-if="selected.dataMode === 'REALTIME'" :loading="reconcileLoading" @click="runReconcile">
+            与批 ADS 对账
+          </el-button>
+          <span class="hint">试跑以当前登录身份执行，只读取已发布的结果。</span>
         </div>
 
         <el-alert v-if="trialError" :title="trialError" type="error" show-icon :closable="false" />
 
-        <template v-if="trialResult">
+        <!-- 离线契约：发布证据 + 地区成交额 -->
+        <template v-if="trialResult && !isRealtime(trialResult)">
           <el-descriptions :column="2" border size="small" class="trial-meta">
             <el-descriptions-item label="业务日期">{{ trialResult.bizDate }}</el-descriptions-item>
             <el-descriptions-item label="记录数">{{ trialResult.rows?.length ?? 0 }}</el-descriptions-item>
@@ -474,6 +617,62 @@ void loadProjects()
             <el-table-column prop="gmv" label="成交额" min-width="140" />
           </el-table>
           <el-empty v-else description="该业务日没有数据行，发布证据仍然有效" />
+        </template>
+
+        <!-- 实时契约：双时钟 + 可用性状态 + 地区明细 -->
+        <template v-if="trialResult && isRealtime(trialResult)">
+          <el-alert
+            v-if="trialResult.state === 'IN_PROGRESS'"
+            title="分区仍在写入或未过静默窗口，以下为半成品，请勿对外使用。"
+            type="warning" show-icon :closable="false"
+          />
+          <el-descriptions :column="2" border size="small" class="trial-meta">
+            <el-descriptions-item label="业务日期">{{ trialResult.bizDate }}</el-descriptions-item>
+            <el-descriptions-item label="可用性">
+              <el-tag :type="trialResult.state === 'PRODUCED' ? 'success' : trialResult.state === 'IN_PROGRESS' ? 'warning' : 'info'" size="small">
+                {{ stateText[trialResult.state] ?? trialResult.state }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="时效">
+              <el-tag :type="trialResult.freshness === 'STALE' ? 'danger' : trialResult.freshness === 'FRESH' ? 'success' : 'warning'" size="small">
+                {{ freshnessText[trialResult.freshness] ?? trialResult.freshness }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="观测时间">{{ trialResult.observedAt ?? '—' }}</el-descriptions-item>
+            <el-descriptions-item label="数据新鲜度滞后">{{ trialResult.lagSeconds ?? '—' }} 秒</el-descriptions-item>
+            <el-descriptions-item label="链路处理滞后">{{ trialResult.processingLagSeconds ?? '—' }} 秒</el-descriptions-item>
+            <el-descriptions-item label="推进事件数">{{ trialResult.progress?.eventCount ?? '—' }}</el-descriptions-item>
+            <el-descriptions-item label="时区 / 单位">{{ trialResult.timezone }} · {{ trialResult.amountUnit }}</el-descriptions-item>
+          </el-descriptions>
+          <el-table v-if="trialResult.regions?.length" :data="trialResult.regions" border size="small">
+            <el-table-column prop="region" label="地区" min-width="120" />
+            <el-table-column prop="gmv" label="成交额" min-width="120" />
+            <el-table-column prop="orderCount" label="已支付订单数" min-width="120" />
+          </el-table>
+          <el-empty v-else :description="trialResult.state === 'EMPTY' ? '作业已推进，该业务日确无成交' : '该业务日尚无产出'" />
+        </template>
+
+        <!-- 批流对账结果 -->
+        <el-alert v-if="reconcileError" :title="reconcileError" type="error" show-icon :closable="false" />
+        <template v-if="reconcileResult">
+          <h4>批流对账</h4>
+          <el-descriptions :column="2" border size="small" class="trial-meta">
+            <el-descriptions-item label="业务日期">{{ reconcileResult.bizDate }}</el-descriptions-item>
+            <el-descriptions-item label="结论">
+              <el-tag :type="reconcileResult.matched ? 'success' : 'danger'" size="small">
+                {{ reconcileResult.matched ? '逐地区一致' : '存在差异' }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="实时可用性">{{ reconcileResult.realtime.state }}</el-descriptions-item>
+            <el-descriptions-item label="批侧可用性">{{ reconcileResult.batch.state }}</el-descriptions-item>
+            <el-descriptions-item label="实时处理滞后">{{ reconcileResult.realtime.processingLagSeconds ?? '—' }} 秒</el-descriptions-item>
+          </el-descriptions>
+          <el-table :data="reconcileResult.regions" border size="small">
+            <el-table-column prop="region" label="地区" min-width="110" />
+            <el-table-column prop="realtimeGmv" label="实时 GMV" min-width="110" />
+            <el-table-column prop="batchGmv" label="批 GMV" min-width="110" />
+            <el-table-column prop="verdict" label="判定" min-width="130" />
+          </el-table>
         </template>
 
         <h4>请求示例</h4>

@@ -17,9 +17,20 @@ import java.util.List;
 public record RealtimeReconcile(String bizDate, boolean matched, Side realtime, Side batch,
                                 List<RegionDiff> regions) {
 
-    /** 一侧的时效与版本证据。 */
+    /**
+     * 一侧的时效与版本证据。
+     *
+     * @param truncated            本侧结果是否因 maxRows 截断；任一侧截断时不判 matched
+     * @param processingLagSeconds 处理时钟滞后（仅实时侧有值），批侧为 null；与 lagSeconds 含义不同，勿合并
+     */
     public record Side(String state, String observedAt, Long lagSeconds, String freshness,
-                       int regionCount, String amountUnit, boolean truncated) {}
+                       int regionCount, String amountUnit, boolean truncated, Long processingLagSeconds) {
+        /** 兼容无截断信息、无处理信号的旧调用。 */
+        public Side(String state, String observedAt, Long lagSeconds, String freshness,
+                    int regionCount, String amountUnit) {
+            this(state, observedAt, lagSeconds, freshness, regionCount, amountUnit, false, null);
+        }
+    }
 
     /**
      * 逐地区比对结果。

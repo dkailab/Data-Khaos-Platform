@@ -29,6 +29,8 @@ public class WarehouseApiVersion {
     private String amountUnit;
     private int freshnessFreshSeconds;
     private int freshnessStaleSeconds;
+    /** 分区静默窗口（秒）：作业推进距今不足该值时结果判为 IN_PROGRESS。0 表示关闭，存量默认。 */
+    private int quietSeconds;
     private Status status;
     private int revision;
     private String createdBy;

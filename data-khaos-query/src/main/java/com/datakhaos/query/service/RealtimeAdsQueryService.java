@@ -62,6 +62,8 @@ public class RealtimeAdsQueryService {
     public static final String STATE_PRODUCED = "PRODUCED";
     public static final String STATE_EMPTY = "EMPTY";
     public static final String STATE_NOT_YET_PRODUCED = "NOT_YET_PRODUCED";
+    /** 推进信号表明分区仍在写入或未过静默窗口：有行也可能是半成品，不能当作 PRODUCED。 */
+    public static final String STATE_IN_PROGRESS = "IN_PROGRESS";
     public static final String FRESHNESS_FRESH = "FRESH";
     public static final String FRESHNESS_LAGGING = "LAGGING";
     public static final String FRESHNESS_STALE = "STALE";
@@ -92,9 +94,16 @@ public class RealtimeAdsQueryService {
      * @param freshSeconds lag 不超过该值视为 FRESH
      * @param staleSeconds lag 超过该值视为 STALE
      * @param maxRows      最大返回地区数
+     * @param quietSeconds 分区静默窗口：最后写入距今不足该秒数时结果视为 IN_PROGRESS。0 表示关闭（默认，存量行为不变）
      */
     public record Contract(String assetId, String batchAssetId, String timezone, String amountUnit,
-                           int freshSeconds, int staleSeconds, int maxRows) {}
+                           int freshSeconds, int staleSeconds, int maxRows, int quietSeconds) {
+        /** 存量调用：不开启静默窗口，行为与加入该字段前完全一致。 */
+        public Contract(String assetId, String batchAssetId, String timezone, String amountUnit,
+                        int freshSeconds, int staleSeconds, int maxRows) {
+            this(assetId, batchAssetId, timezone, amountUnit, freshSeconds, staleSeconds, maxRows, 0);
+        }
+    }
 
     public RealtimeRegionGmv regionGmv(Contract contract, String requestedDate) {
         validate(contract);
@@ -159,15 +168,21 @@ public class RealtimeAdsQueryService {
             }
         }
         boolean matched = !realtime.truncated() && !batch.truncated()
-                && !STATE_NOT_YET_PRODUCED.equals(realtime.state()) && !STATE_NOT_YET_PRODUCED.equals(batch.state())
+                && produced(realtime.state()) && produced(batch.state())
                 && diffs.values().stream().allMatch(diff -> "MATCHED".equals(diff.verdict()));
         return new RealtimeReconcile(date.toString(), matched, side(realtime), side(batch),
                 new ArrayList<>(diffs.values()));
     }
 
+    /** 只有定稿的结果才能参与对账：写入中（IN_PROGRESS）和尚未产出都不算一致。 */
+    private static boolean produced(String state) {
+        return STATE_PRODUCED.equals(state) || STATE_EMPTY.equals(state);
+    }
+
     private static RealtimeReconcile.Side side(RealtimeRegionGmv payload) {
         return new RealtimeReconcile.Side(payload.state(), payload.observedAt(), payload.lagSeconds(),
-                payload.freshness(), payload.rowCount(), payload.amountUnit(), payload.truncated());
+                payload.freshness(), payload.rowCount(), payload.amountUnit(),
+                payload.truncated(), payload.processingLagSeconds());
     }
 
     private static Map<String, RegionSample> index(List<RegionSample> rows) {
@@ -182,8 +197,22 @@ public class RealtimeAdsQueryService {
     static RealtimeRegionGmv judge(Contract contract, LocalDate date, ZoneId zone,
                                    List<RegionSample> rows, boolean truncated,
                                    EventProgress progress, Clock clock) {
+        LocalDateTime now = LocalDateTime.now(clock.withZone(zone));
+
+        // 处理时钟：作业推进信号的 advanced_at，表示作业「处理到」该业务日的时刻；
+        // 与结果行的 observed_at（事件观测时刻）互补：前者反映链路是否堵塞，后者反映数据是否新鲜。
+        LocalDateTime advancedAt = progress == null ? null : parseTimestamp(progress.advancedAt());
+        Long processingLagSeconds = advancedAt == null ? null : lagSeconds(advancedAt, now);
+
+        // 静默窗口：契约声明 quietSeconds>0 时，作业刚推进不足以证明分区已写完。
+        // 即使结果表已有行，也判为 IN_PROGRESS，避免调用方读到半成品的 PRODUCED。
+        boolean stillWriting = contract.quietSeconds() > 0 && processingLagSeconds != null
+                && processingLagSeconds < contract.quietSeconds();
+
         String state;
-        if (!rows.isEmpty()) {
+        if (stillWriting) {
+            state = STATE_IN_PROGRESS;
+        } else if (!rows.isEmpty()) {
             state = STATE_PRODUCED;
         } else if (progress != null && progress.advancedAt() != null) {
             // 作业消费过该业务日的事件，只是没有成交单 → 空数据
@@ -193,11 +222,11 @@ public class RealtimeAdsQueryService {
             state = STATE_NOT_YET_PRODUCED;
         }
 
-        LocalDateTime now = LocalDateTime.now(clock.withZone(zone));
         String observedAt = null;
         Long lagSeconds = null;
         String freshness = FRESHNESS_UNKNOWN;
-        if (state.equals(STATE_PRODUCED)) {
+        // IN_PROGRESS 时结果尚未定稿，不给出面向消费的时效结论； observedAt/lag 仍可回显便于诊断。
+        if (state.equals(STATE_PRODUCED) || state.equals(STATE_IN_PROGRESS)) {
             LocalDateTime latest = null;
             for (RegionSample row : rows) {
                 LocalDateTime candidate = parseTimestamp(row.observedAt());
@@ -206,7 +235,8 @@ public class RealtimeAdsQueryService {
             if (latest != null) {
                 observedAt = formatOffset(latest, zone);
                 lagSeconds = lagSeconds(latest, now);
-                freshness = classify(lagSeconds, contract);
+                // 只有定稿的 PRODUCED 才分档；IN_PROGRESS 保留 UNKNOWN，避免误导调用方使用半成品。
+                if (state.equals(STATE_PRODUCED)) freshness = classify(lagSeconds, contract);
             }
         }
 
@@ -214,8 +244,7 @@ public class RealtimeAdsQueryService {
                 : new RealtimeRegionGmv.Progress(
                         progress.advancedAt() == null ? null
                                 : formatOffset(parseTimestamp(progress.advancedAt()), zone),
-                        progress.advancedAt() == null ? null
-                                : lagSeconds(parseTimestamp(progress.advancedAt()), now),
+                        processingLagSeconds,
                         progress.eventCount(),
                         progress.maxEventTime() == null ? null
                                 : formatOffset(parseTimestamp(progress.maxEventTime()), zone));
@@ -228,7 +257,7 @@ public class RealtimeAdsQueryService {
         return new RealtimeRegionGmv(date.toString(), RealtimeRegionGmv.MODE, contract.timezone(),
                 contract.amountUnit(), state, observedAt, lagSeconds, freshness,
                 new RealtimeRegionGmv.FreshnessThresholds(contract.freshSeconds(), contract.staleSeconds()),
-                signal, truncated, regions.size(), regions);
+                signal, processingLagSeconds, truncated, regions.size(), regions);
     }
 
     private static String classify(long lagSeconds, Contract contract) {

@@ -33,6 +33,10 @@ ALTER TABLE warehouse_api_version ADD COLUMN amount_unit VARCHAR(8) NOT NULL DEF
 ALTER TABLE warehouse_api_version ADD COLUMN freshness_fresh_seconds INT NOT NULL DEFAULT 60;
 ALTER TABLE warehouse_api_version ADD COLUMN freshness_stale_seconds INT NOT NULL DEFAULT 300;
 
+-- 分区静默窗口（秒）：作业推进距今不足该值时结果判为 IN_PROGRESS，避免半成品被当作 PRODUCED。
+-- 默认 0 表示关闭，存量版本行为完全不变；仅 REALTIME 版本可配置为大于 0（上限 3600）。
+ALTER TABLE warehouse_api_version ADD COLUMN quiet_seconds INT NOT NULL DEFAULT 0;
+
 -- 调用审计补时效快照：事后可复核「当时返回的是哪种时效」
 ALTER TABLE warehouse_api_call_audit ADD COLUMN freshness VARCHAR(16) NULL;
 
@@ -40,5 +44,5 @@ ALTER TABLE warehouse_api_call_audit ADD COLUMN freshness VARCHAR(16) NULL;
 -- ALTER TABLE warehouse_api_version
 --     DROP COLUMN data_mode, DROP COLUMN realtime_asset_id, DROP COLUMN realtime_batch_asset_id,
 --     DROP COLUMN observed_timezone, DROP COLUMN amount_unit,
---     DROP COLUMN freshness_fresh_seconds, DROP COLUMN freshness_stale_seconds;
+--     DROP COLUMN freshness_fresh_seconds, DROP COLUMN freshness_stale_seconds, DROP COLUMN quiet_seconds;
 -- ALTER TABLE warehouse_api_call_audit DROP COLUMN freshness;

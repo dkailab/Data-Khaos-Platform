@@ -17,8 +17,10 @@ import com.datakhaos.query.entity.WarehouseApiVersion;
  * @param amountUnit            金额单位，默认 CNY（固定两位小数）
  * @param freshnessFreshSeconds FRESH 阈值，默认 60
  * @param freshnessStaleSeconds STALE 阈值，默认 300，须大于 FRESH
+ * @param quietSeconds          分区静默窗口，默认 0（关闭）。大于 0 时作业刚推进的结果判为 IN_PROGRESS
  */
 public record WarehouseApiDraft(String name, int maxRows, WarehouseApiVersion.DataMode dataMode,
                                 String realtimeAssetId, String realtimeBatchAssetId, String observedTimezone,
-                                String amountUnit, int freshnessFreshSeconds, int freshnessStaleSeconds) {
+                                String amountUnit, int freshnessFreshSeconds, int freshnessStaleSeconds,
+                                int quietSeconds) {
 }

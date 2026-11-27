@@ -75,6 +75,20 @@ class RealtimeAdsQueryTest {
         assertEquals(RealtimeAdsQueryService.FRESHNESS_FRESH, payload.freshness());
     }
 
+    /** 双时钟：数据观测时刻很新但作业推进很旧，freshness 仍 FRESH，处理滞后单独暴露。 */
+    @Test
+    void separatesDataFreshnessFromProcessingLag() {
+        var payload = RealtimeAdsQueryService.judge(CONTRACT, DATE, ZONE,
+                List.of(new RealtimeAdsQueryService.RegionSample("east", "100.00", 1, "2026-11-17T00:05:20.000")),
+                false, progress("2026-11-16T23:00:00.000", 1), NOW);
+
+        assertEquals(RealtimeAdsQueryService.FRESHNESS_FRESH, payload.freshness());
+        assertEquals(2L, payload.lagSeconds());
+        // 处理时钟滞后 3922 秒（00:05:22.345 - 23:00:00），反映链路侧而非数据侧
+        assertEquals(3922L, payload.processingLagSeconds());
+        assertEquals(payload.processingLagSeconds(), payload.progress().lagSeconds());
+    }
+
     // ---------------------------------------------------------------- 空结果语义
 
     @Test
@@ -97,6 +111,52 @@ class RealtimeAdsQueryTest {
         var untouched = RealtimeAdsQueryService.judge(CONTRACT, DATE, ZONE, List.of(),
                 false, progress(null, 0), NOW);
         assertEquals(RealtimeAdsQueryService.STATE_NOT_YET_PRODUCED, untouched.state());
+    }
+
+    // ---------------------------------------------------------------- 静默窗口（防半成品）
+
+    /** 开启静默窗口后，作业刚推进就返回 IN_PROGRESS，即使结果表已有行，也不能当成 PRODUCED。 */
+    @Test
+    void marksFreshlyAdvancedPartitionAsInProgressWhenQuietWindowEnabled() {
+        var quiet = new RealtimeAdsQueryService.Contract("mt_realtime_ads", null, "Asia/Shanghai", "CNY", 60, 300, 100, 300);
+        var payload = RealtimeAdsQueryService.judge(quiet, DATE, ZONE,
+                List.of(new RealtimeAdsQueryService.RegionSample("east", "100.00", 1, "2026-11-17T00:05:20.500")),
+                false, progress("2026-11-17T00:05:13.000", 1), NOW);
+
+        assertEquals(RealtimeAdsQueryService.STATE_IN_PROGRESS, payload.state());
+        assertEquals(RealtimeAdsQueryService.FRESHNESS_UNKNOWN, payload.freshness());
+        // 观测时间仍可回显供诊断，但不给出面向消费的时效结论
+        assertEquals("2026-11-17T00:05:20.5+08:00", payload.observedAt());
+        assertEquals(1, payload.rowCount());
+    }
+
+    /** 推进距今不足静默窗口判 IN_PROGRESS；达到或超过窗口即恢复 PRODUCED（边界为「不足」）。 */
+    @Test
+    void resumesProducedOnceQuietWindowHasElapsed() {
+        var quiet = new RealtimeAdsQueryService.Contract("mt_realtime_ads", null, "Asia/Shanghai", "CNY", 60, 300, 100, 60);
+        // 推进距今 59 秒 → 不足窗口，仍判写入中
+        var inside = RealtimeAdsQueryService.judge(quiet, DATE, ZONE,
+                List.of(new RealtimeAdsQueryService.RegionSample("east", "100.00", 1, "2026-11-17T00:04:23.345")),
+                false, progress("2026-11-17T00:04:23.345", 1), NOW);
+        assertEquals(RealtimeAdsQueryService.STATE_IN_PROGRESS, inside.state());
+
+        // 推进距今恰好 60 秒 → 已越过窗口，恢复 PRODUCED 并正常分档
+        var boundary = RealtimeAdsQueryService.judge(quiet, DATE, ZONE,
+                List.of(new RealtimeAdsQueryService.RegionSample("east", "100.00", 1, "2026-11-17T00:04:22.345")),
+                false, progress("2026-11-17T00:04:22.345", 1), NOW);
+        assertEquals(RealtimeAdsQueryService.STATE_PRODUCED, boundary.state());
+        assertEquals(RealtimeAdsQueryService.FRESHNESS_FRESH, boundary.freshness());
+    }
+
+    /** 静默窗口默认关闭时，即便作业刚推进也照旧返回 PRODUCED（存量行为不变）。 */
+    @Test
+    void quietWindowDisabledKeepsLegacyProducedBehavior() {
+        var payload = RealtimeAdsQueryService.judge(CONTRACT, DATE, ZONE,
+                List.of(new RealtimeAdsQueryService.RegionSample("east", "100.00", 1, "2026-11-17T00:05:20.000")),
+                false, progress("2026-11-17T00:05:13.000", 1), NOW);
+
+        assertEquals(RealtimeAdsQueryService.STATE_PRODUCED, payload.state());
+        assertEquals(RealtimeAdsQueryService.FRESHNESS_FRESH, payload.freshness());
     }
 
     // ---------------------------------------------------------------- 读取与截断

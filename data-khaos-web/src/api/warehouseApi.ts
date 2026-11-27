@@ -12,6 +12,7 @@ import type { PageResult } from '@/types'
  */
 
 export type WarehouseApiStatus = 'DRAFT' | 'PUBLISHED' | 'OFFLINE'
+export type WarehouseApiDataMode = 'BATCH' | 'REALTIME'
 
 export interface WarehouseApiVersion {
   id: string
@@ -20,6 +21,14 @@ export interface WarehouseApiVersion {
   apiVersion: number
   apiName: string
   maxRows: number
+  dataMode: WarehouseApiDataMode
+  realtimeAssetId?: string
+  realtimeBatchAssetId?: string
+  observedTimezone?: string
+  amountUnit?: string
+  freshnessFreshSeconds?: number
+  freshnessStaleSeconds?: number
+  quietSeconds?: number
   status: WarehouseApiStatus
   revision: number
   createdBy?: string
@@ -32,9 +41,18 @@ export interface WarehouseApiVersion {
   offlinedAt?: string
 }
 
+/** 草稿写入模型：实时字段仅在 dataMode=REALTIME 时必填，省略即回落 BATCH 默认。 */
 export interface WarehouseApiDraft {
   name: string
   maxRows: number
+  dataMode?: WarehouseApiDataMode
+  realtimeAssetId?: string
+  realtimeBatchAssetId?: string
+  observedTimezone?: string
+  amountUnit?: string
+  freshnessFreshSeconds?: number
+  freshnessStaleSeconds?: number
+  quietSeconds?: number
 }
 
 export interface WarehouseApiCredential {
@@ -58,7 +76,7 @@ export interface RegionAmount {
   gmv: string
 }
 
-/** 固定契约：地区成交额 */
+/** 固定契约：地区成交额（BATCH 模式） */
 export interface OrderRegionGmv {
   bizDate: string
   publicationId: string
@@ -66,6 +84,49 @@ export interface OrderRegionGmv {
   publishedAt: string
   truncated: boolean
   rows: RegionAmount[]
+  dataMode?: 'BATCH'
+}
+
+/** 实时契约结果（REALTIME 模式）：双时钟 + 三态/四态可用性 */
+export interface RealtimeRegionGmv {
+  bizDate: string
+  dataMode: 'REALTIME'
+  timezone: string
+  amountUnit: string
+  state: 'PRODUCED' | 'EMPTY' | 'NOT_YET_PRODUCED' | 'IN_PROGRESS'
+  observedAt: string | null
+  lagSeconds: number | null
+  freshness: 'FRESH' | 'LAGGING' | 'STALE' | 'UNKNOWN'
+  thresholds: { freshSeconds: number; staleSeconds: number }
+  progress: {
+    advancedAt: string | null
+    lagSeconds: number | null
+    eventCount: number
+    maxEventTime: string | null
+  } | null
+  processingLagSeconds: number | null
+  truncated: boolean
+  rowCount: number
+  regions: Array<{ region: string; gmv: string; orderCount: number; observedAt: string | null }>
+}
+
+/** 平台身份判别：响应带 dataMode 字段，REALTIME 为实时契约，其余按离线契约处理 */
+export type WarehouseApiResult = OrderRegionGmv | RealtimeRegionGmv
+
+/** 实时与批 ADS 逐地区对账结果 */
+export interface RealtimeReconcile {
+  bizDate: string
+  matched: boolean
+  realtime: { state: string; observedAt: string | null; lagSeconds: number | null; freshness: string; regionCount: number; amountUnit: string; processingLagSeconds: number | null }
+  batch: { state: string; observedAt: string | null; lagSeconds: number | null; freshness: string; regionCount: number; amountUnit: string; processingLagSeconds?: number | null }
+  regions: Array<{
+    region: string
+    realtimeGmv: string | null
+    batchGmv: string | null
+    realtimeOrderCount: number | null
+    batchOrderCount: number | null
+    verdict: 'MATCHED' | 'ONLY_REALTIME' | 'ONLY_BATCH' | 'MISMATCH'
+  }>
 }
 
 /** 受管物化分区就绪状态 */
@@ -146,8 +207,16 @@ export function revokeWarehouseApiCredential(
 
 /** 以平台登录身份试跑已发布版本（机器调用走 Bearer 凭据，见运行示例） */
 export function invokeWarehouseApi(projectId: string, apiCode: string, version: number, bizDate: string) {
-  return get<OrderRegionGmv>(
+  return get<WarehouseApiResult>(
     `/data/v1/projects/${encodeURIComponent(projectId)}/apis/${encodeURIComponent(apiCode)}/versions/${version}`,
+    { bizDate },
+  )
+}
+
+/** 实时契约与批 ADS 逐地区对账（草稿态也可跑，便于发布前核对口径） */
+export function reconcileWarehouseApi(projectId: string, apiCode: string, version: number, bizDate: string) {
+  return get<RealtimeReconcile>(
+    `${versionPath(projectId, apiCode, version)}/reconcile`,
     { bizDate },
   )
 }

@@ -40,6 +40,7 @@ public class WarehouseApiService {
     private static final int DEFAULT_FRESH_SECONDS = 60;
     private static final int DEFAULT_STALE_SECONDS = 300;
     private static final int MAX_THRESHOLD_SECONDS = 86_400;
+    private static final int MAX_QUIET_SECONDS = 3_600;
 
     private final WarehouseApiVersionMapper mapper;
     private final PermissionApiClient permissions;
@@ -75,6 +76,7 @@ public class WarehouseApiService {
         draft.setAmountUnit(spec.amountUnit());
         draft.setFreshnessFreshSeconds(spec.freshSeconds());
         draft.setFreshnessStaleSeconds(spec.staleSeconds());
+        draft.setQuietSeconds(spec.quietSeconds());
         draft.setStatus(DRAFT);
         draft.setRevision(1);
         var now = LocalDateTime.now().withNano(0);
@@ -98,6 +100,7 @@ public class WarehouseApiService {
         var changes = update(draft, DRAFT, revision, user, LocalDateTime.now().withNano(0))
                 .set(WarehouseApiVersion::getApiName, validateDraft(body.name(), body.maxRows()))
                 .set(WarehouseApiVersion::getMaxRows, body.maxRows());
+        // 省略 dataMode 时只更新名称与行数上限，保留既有契约；显式提供时整体替换（含静默窗口）。
         if (body.dataMode() != null) {
             Spec spec = spec(body);
             changes.set(WarehouseApiVersion::getDataMode, spec.mode())
@@ -106,7 +109,8 @@ public class WarehouseApiService {
                     .set(WarehouseApiVersion::getObservedTimezone, spec.timezone())
                     .set(WarehouseApiVersion::getAmountUnit, spec.amountUnit())
                     .set(WarehouseApiVersion::getFreshnessFreshSeconds, spec.freshSeconds())
-                    .set(WarehouseApiVersion::getFreshnessStaleSeconds, spec.staleSeconds());
+                    .set(WarehouseApiVersion::getFreshnessStaleSeconds, spec.staleSeconds())
+                    .set(WarehouseApiVersion::getQuietSeconds, spec.quietSeconds());
         }
         applyUpdate(changes);
         return mapper.selectById(draft.getId());
@@ -165,7 +169,8 @@ public class WarehouseApiService {
     RealtimeAdsQueryService.Contract contract(WarehouseApiVersion release) {
         return new RealtimeAdsQueryService.Contract(release.getRealtimeAssetId(), release.getRealtimeBatchAssetId(),
                 release.getObservedTimezone(), release.getAmountUnit(),
-                release.getFreshnessFreshSeconds(), release.getFreshnessStaleSeconds(), release.getMaxRows());
+                release.getFreshnessFreshSeconds(), release.getFreshnessStaleSeconds(), release.getMaxRows(),
+                release.getQuietSeconds());
     }
 
     WarehouseApiVersion requirePublished(String projectId, String code, int version) {
@@ -259,13 +264,18 @@ public class WarehouseApiService {
         String unit = blank(body.amountUnit()) ? DEFAULT_UNIT : body.amountUnit().strip().toUpperCase();
         int fresh = body.freshnessFreshSeconds() <= 0 ? DEFAULT_FRESH_SECONDS : body.freshnessFreshSeconds();
         int stale = body.freshnessStaleSeconds() <= 0 ? DEFAULT_STALE_SECONDS : body.freshnessStaleSeconds();
+        int quiet = Math.max(0, body.quietSeconds());
         try {
             ZoneId.of(timezone);
         } catch (RuntimeException e) {
             throw new BusinessException(ResultCode.VALIDATE_FAILED, "契约时区无效");
         }
         if (mode != REALTIME) {
-            return new Spec(name, body.maxRows(), BATCH, null, null, timezone, unit, fresh, stale);
+            // 离线契约不使用静默窗口，统一归零，避免脏配置写入。
+            return new Spec(name, body.maxRows(), BATCH, null, null, timezone, unit, fresh, stale, 0);
+        }
+        if (quiet > MAX_QUIET_SECONDS) {
+            throw new BusinessException(ResultCode.VALIDATE_FAILED, "静默窗口不能超过 3600 秒");
         }
         if (body.realtimeAssetId() == null || !ASSET_ID.matcher(body.realtimeAssetId()).matches()) {
             throw new BusinessException(ResultCode.VALIDATE_FAILED, "实时契约需要有效的 ADS 资产");
@@ -281,7 +291,7 @@ public class WarehouseApiService {
         }
         return new Spec(name, body.maxRows(), REALTIME, body.realtimeAssetId(),
                 blank(body.realtimeBatchAssetId()) ? null : body.realtimeBatchAssetId().strip(),
-                timezone, unit, fresh, stale);
+                timezone, unit, fresh, stale, quiet);
     }
 
     private static boolean blank(String value) {
@@ -289,5 +299,6 @@ public class WarehouseApiService {
     }
 
     private record Spec(String name, int maxRows, WarehouseApiVersion.DataMode mode, String realtimeAssetId,
-                        String batchAssetId, String timezone, String amountUnit, int freshSeconds, int staleSeconds) {}
+                        String batchAssetId, String timezone, String amountUnit, int freshSeconds, int staleSeconds,
+                        int quietSeconds) {}
 }

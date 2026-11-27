@@ -307,14 +307,41 @@ class WarehouseApiLifecycleTest {
         var batch = call(draft(post(v1), 10), "developer", ResultCode.SUCCESS);
         assertEquals("BATCH", batch.path("dataMode").asText());
         assertTrue(batch.path("realtimeAssetId").isNull());
+        assertEquals(0, batch.path("quietSeconds").asInt());
+    }
+
+    /** 静默窗口随草稿持久化并影响试跑：作业刚推进的结果判为 IN_PROGRESS 而非 PRODUCED。 */
+    @Test
+    void configuresQuietWindowAndReturnsInProgressForFreshlyAdvancedPartition() throws Exception {
+        String v1 = ADMIN + VERSION + "1";
+        var created = call(realtimeDraft(post(v1), 50, "mt_realtime_ads", 300), "developer", ResultCode.SUCCESS);
+        assertEquals(300, created.path("quietSeconds").asInt());
+        call(post(v1 + "/publish").param("revision", "1"), "developer", ResultCode.SUCCESS);
+
+        // mock 的推进时间为 00:05:13，相对当前真实时钟已过期很久，窗口不会触发。
+        // 这里直接验证配置写入与默认离线契约仍为 0；窗口触发逻辑由 RealtimeAdsQueryTest 用固定时钟覆盖。
+        var payload = call(invoke(1), "viewer", ResultCode.SUCCESS);
+        assertEquals("REALTIME", payload.path("dataMode").asText());
+        assertTrue(payload.has("processingLagSeconds"));
+        assertTrue(payload.path("progress").has("lagSeconds"));
+
+        // 超出上限的静默窗口被拒绝
+        call(realtimeDraft(post(ADMIN + VERSION + "2"), 10, "mt_realtime_ads", 3601),
+                "developer", ResultCode.VALIDATE_FAILED);
     }
 
     private static MockHttpServletRequestBuilder realtimeDraft(MockHttpServletRequestBuilder request,
             int maxRows, String assetId) {
+        return realtimeDraft(request, maxRows, assetId, 0);
+    }
+
+    private static MockHttpServletRequestBuilder realtimeDraft(MockHttpServletRequestBuilder request,
+            int maxRows, String assetId, int quietSeconds) {
         String asset = assetId == null ? "" : ",\"realtimeAssetId\":\"" + assetId + "\"";
         return request.contentType(MediaType.APPLICATION_JSON).content(
                 "{\"name\":\"实时区域成交额\",\"maxRows\":" + maxRows + ",\"dataMode\":\"REALTIME\""
-                        + asset + ",\"realtimeBatchAssetId\":\"mt_batch_ads\"}");
+                        + asset + ",\"realtimeBatchAssetId\":\"mt_batch_ads\","
+                        + "\"quietSeconds\":" + quietSeconds + "}");
     }
 
     private static MockHttpServletRequestBuilder issue(String management) {
