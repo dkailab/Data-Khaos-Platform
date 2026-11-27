@@ -32,8 +32,9 @@ public class DatasourceController {
     @GetMapping("/page")
     public R<PageResult<MetaDatasource>> page(@RequestParam(defaultValue = "1") long current,
                                               @RequestParam(defaultValue = "10") long size,
-                                              @RequestParam(required = false) String keyword) {
-        return R.ok(datasourceService.page(current, size, keyword));
+                                              @RequestParam(required = false) String keyword,
+                                              @RequestParam(required = false) String dsType) {
+        return R.ok(datasourceService.page(current, size, keyword, dsType));
     }
 
     @Operation(summary = "数据源详情")

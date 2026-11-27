@@ -38,10 +38,12 @@ public class DatasourceService {
     // ---------- 配置管理 ----------
 
     /** 分页查询数据源（密码不参与序列化输出） */
-    public PageResult<MetaDatasource> page(long current, long size, String keyword) {
+    public PageResult<MetaDatasource> page(long current, long size, String keyword, String dsType) {
         LambdaQueryWrapper<MetaDatasource> wrapper = new LambdaQueryWrapper<MetaDatasource>()
-                .like(StrUtil.isNotBlank(keyword), MetaDatasource::getDsName, keyword)
-                .orderByDesc(MetaDatasource::getCreateTime);
+                .eq(StrUtil.isNotBlank(dsType), MetaDatasource::getDsType, dsType)
+                .and(StrUtil.isNotBlank(keyword), filters -> filters.like(MetaDatasource::getDsName, keyword)
+                        .or().like(MetaDatasource::getHost, keyword))
+                .orderByDesc(MetaDatasource::getCreateTime, MetaDatasource::getId);
         Page<MetaDatasource> page = mapper.selectPage(new Page<>(current, size), wrapper);
         return PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), page.getRecords());
     }
