@@ -1,5 +1,9 @@
 import { del, get, post, put } from './request'
-import type { PageResult, WorkflowDef, WorkflowGraph, WorkflowNodeRun, WorkflowRevision, WorkflowRun } from '@/types'
+import type {
+  NodeDebugResult, PageResult, WorkflowDef, WorkflowDependencyGraph, WorkflowGraph, WorkflowNodeRun,
+  WorkflowPublishResult, WorkflowRevision, WorkflowRun, WorkflowSqlFile, WorkflowTaskView,
+  WorkflowUpstreamView,
+} from '@/types'
 
 /** 保存工作流图（新增/整体更新） */
 export function saveWorkflowGraph(data: WorkflowGraph) {
@@ -56,4 +60,89 @@ export function createWorkflowRevision(id: string, note: string) {
 
 export function createWorkflowRevisionDraft(id: string, revisionId: string, name: string) {
   return post<WorkflowDef>(`/workflow/${id}/revisions/${revisionId}/draft`, { name })
+}
+
+/* ------------------------------ 数据开发工作台 ------------------------------ */
+
+/** 运行受理结果（startCodes 局部运行同样返回该结构） */
+export interface WorkflowRunAccept {
+  state: 'ACCEPTED' | 'DUPLICATE' | 'REJECTED'
+  runId?: string
+  bizDate?: string
+  rejectCode?: string
+  rejectMessage?: string
+  activeRunId?: string
+}
+
+/** 任务流下拉选项 */
+export function listWorkflowOptions(projectId?: string) {
+  return get<WorkflowDef[]>('/workflow/options', { projectId })
+}
+
+/** 发布（自动固化版本快照） */
+export function publishWorkflow(id: string) {
+  return post<WorkflowPublishResult>(`/workflow/${id}/publish`)
+}
+
+/** 下线 */
+export function offlineWorkflow(id: string) {
+  return post<WorkflowPublishResult>(`/workflow/${id}/offline`)
+}
+
+/** 任务列表（含最近运行状态） */
+export function listWorkflowTasks(id: string) {
+  return get<WorkflowTaskView[]>(`/workflow/${id}/tasks`)
+}
+
+/** 单节点调试 */
+export function debugWorkflowNode(id: string, code: string, params: Record<string, any>) {
+  return post<NodeDebugResult>(`/workflow/${id}/nodes/${encodeURIComponent(code)}/debug`, params,
+    { timeout: 120000 })
+}
+
+/** 带业务日期与运行范围的运行受理 */
+export function runWorkflow(id: string, payload: {
+  requestId: string; bizDate: string; params?: Record<string, any>; startCodes?: string[]
+}) {
+  return post<WorkflowRunAccept>(`/workflow/${id}/runs`, payload)
+}
+
+/** SQL 文件资源列表 */
+export function listWorkflowSqlFiles(projectId?: string, keyword?: string) {
+  return get<WorkflowSqlFile[]>('/workflow/sql-file/list', { projectId, keyword })
+}
+
+export function getWorkflowSqlFile(id: string) {
+  return get<WorkflowSqlFile>(`/workflow/sql-file/${id}`)
+}
+
+export function saveWorkflowSqlFile(payload: {
+  id?: string; projectId?: string; folder?: string; name: string; description?: string
+  datasourceId?: string; content?: string
+}) {
+  return post<WorkflowSqlFile>('/workflow/sql-file', payload)
+}
+
+export function publishWorkflowSqlFile(id: string) {
+  return post<WorkflowSqlFile>(`/workflow/sql-file/${id}/publish`)
+}
+
+export function deleteWorkflowSqlFile(id: string) {
+  return del<void>(`/workflow/sql-file/${id}`)
+}
+
+/** 上游任务流依赖 */
+export function listWorkflowUpstreams(id: string) {
+  return get<WorkflowUpstreamView[]>(`/workflow/${id}/upstreams`)
+}
+
+export function saveWorkflowUpstreams(id: string, items: Array<{
+  upstreamWfId: string; dependStrategy: string; paramMapping?: string; enabled?: boolean
+}>) {
+  return put<WorkflowUpstreamView[]>(`/workflow/${id}/upstreams`, items)
+}
+
+/** 跨任务流依赖图 */
+export function getWorkflowDependencyGraph(id: string, depth = 3) {
+  return get<WorkflowDependencyGraph>(`/workflow/${id}/upstreams/graph`, { depth })
 }

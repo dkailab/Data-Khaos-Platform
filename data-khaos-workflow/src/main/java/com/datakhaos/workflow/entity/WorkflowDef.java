@@ -6,6 +6,8 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
+import java.time.LocalDateTime;
+
 /**
  * 工作流定义（DAG 图的元信息 + 调度配置）
  */
@@ -40,4 +42,10 @@ public class WorkflowDef extends WorkflowBaseEntity {
 
     /** 运行参数模板（JSON，供节点 ${param} 替换） */
     private String params;
+
+    /** 最近发布绑定的版本号（发布时自动生成版本快照） */
+    private Integer publishedRevision;
+
+    /** 最近发布时间；下线后置空，历史版本仍保留 */
+    private LocalDateTime publishedAt;
 }

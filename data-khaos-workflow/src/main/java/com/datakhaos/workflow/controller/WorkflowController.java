@@ -54,8 +54,9 @@ public class WorkflowController {
     @GetMapping("/page")
     public R<PageResult<WorkflowDef>> page(@RequestParam(defaultValue = "1") long current,
                                            @RequestParam(defaultValue = "10") long size,
-                                           @RequestParam(required = false) String keyword) {
-        return R.ok(workflowService.page(current, size, keyword));
+                                           @RequestParam(required = false) String keyword,
+                                           @RequestParam(required = false) Integer status) {
+        return R.ok(workflowService.page(current, size, keyword, status));
     }
 
     /** 删除工作流 */

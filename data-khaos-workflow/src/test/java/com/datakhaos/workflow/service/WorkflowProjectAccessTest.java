@@ -66,11 +66,12 @@ class WorkflowProjectAccessTest {
                     assertEquals("selectById", method.getName());
                     return definition;
                 });
-        WorkflowRunner runner = new WorkflowRunner(null, null, null, null, null, null, null, null) {
+        WorkflowRunner runner = new WorkflowRunner(null, null, null, null, null, null, null, null, null) {
             @Override
             public String createRunGraph(String wfId, String triggerType, Map<String, Object> params, String wfName,
                                          String projectId, String jobId, String logId, String requestId,
-                                         String bizDate, String requestParams, String requestHash, LocalDateTime scheduledAt) {
+                                         String bizDate, String requestParams, String requestHash,
+                                         LocalDateTime scheduledAt, java.util.List<String> startCodes) {
                 assertEquals(requestId.startsWith("range-1:") ? "BACKFILL" : "MANUAL", triggerType);
                 assertEquals(PROJECT, projectId);
                 assertEquals(bizDate, params.get("bizDate"));
@@ -78,7 +79,8 @@ class WorkflowProjectAccessTest {
             }
 
             @Override
-            public void executeAsync(String runId, String wfId, Map<String, Object> params, String bizDate) {
+            public void executeAsync(String runId, String wfId, Map<String, Object> params, String bizDate,
+                                     java.util.List<String> startCodes) {
                 assertTrue(runId.startsWith("run-"));
             }
         };
@@ -94,7 +96,18 @@ class WorkflowProjectAccessTest {
                 return true;
             }
         };
-        service = new WorkflowService(definitions, null, null, null, runner, access, batches);
+        WorkflowUpstreamService upstreams = new WorkflowUpstreamService(null, null, null, null) {
+            @Override
+            public java.util.List<String> blockers(String wfId, String bizDate) {
+                return java.util.List.of();
+            }
+
+            @Override
+            public Map<String, Object> mergeParams(String wfId, Map<String, Object> params, String bizDate) {
+                return params;
+            }
+        };
+        service = new WorkflowService(definitions, null, null, null, runner, access, batches, upstreams);
     }
 
     @Test

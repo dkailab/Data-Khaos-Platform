@@ -21,4 +21,10 @@ public class RunRequest implements Serializable {
 
     /** 运行参数（可选，覆盖工作流参数模板） */
     private Map<String, Object> params;
+
+    /**
+     * 局部运行范围：只运行这些节点及其全部下游；为空表示整图运行。
+     * 用于工作台「运行当前及下游」。
+     */
+    private java.util.List<String> startCodes;
 }

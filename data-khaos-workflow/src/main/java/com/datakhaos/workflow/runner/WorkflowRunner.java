@@ -11,9 +11,11 @@ import com.datakhaos.workflow.entity.WorkflowNode;
 import com.datakhaos.workflow.entity.WorkflowNodeRun;
 import com.datakhaos.workflow.entity.WorkflowRun;
 import com.datakhaos.workflow.executor.ExecResult;
-import com.datakhaos.workflow.executor.NodeContext;
 import com.datakhaos.workflow.executor.NodeExecutor;
 import com.datakhaos.workflow.executor.NodeExecutorFactory;
+import com.datakhaos.workflow.executor.PreconditionEvaluator;
+import com.datakhaos.workflow.service.WorkflowGraphValidator;
+import com.datakhaos.workflow.service.WorkflowNodeContextFactory;
 import com.datakhaos.workflow.mapper.WorkflowBizdateLockMapper;
 import com.datakhaos.workflow.mapper.WorkflowEdgeMapper;
 import com.datakhaos.workflow.mapper.WorkflowNodeMapper;
@@ -34,6 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -64,6 +67,7 @@ public class WorkflowRunner {
     @Qualifier("nodeTaskExecutor")
     private final ThreadPoolTaskExecutor nodeTaskExecutor;
     private final WorkflowRunLifecycle lifecycle;
+    private final WorkflowNodeContextFactory contextFactory;
     private final Set<String> activeGraphs = ConcurrentHashMap.newKeySet();
 
     @Resource(name = "workflowGraphExecutor")
@@ -83,7 +87,7 @@ public class WorkflowRunner {
         if (nodes.isEmpty()) {
             throw new BusinessException("工作流未配置任何节点，无法运行");
         }
-        validateGraph(nodes, edges);
+        WorkflowGraphValidator.validate(nodes, edges);
 
         LocalDateTime now = LocalDateTime.now();
         WorkflowRun run = new WorkflowRun();
@@ -136,6 +140,21 @@ public class WorkflowRunner {
                                  String scheduleJobId, String scheduleLogId,
                                  String requestId, String bizDate,
                                  String requestParams, String requestHash, LocalDateTime scheduledAt) {
+        return createRunGraph(wfId, triggerType, params, wfName, projectGroupId, scheduleJobId, scheduleLogId,
+                requestId, bizDate, requestParams, requestHash, scheduledAt, null);
+    }
+
+    /**
+     * 带运行范围的受理：{@code startCodes} 非空时只创建「起始节点及其全部下游」的运行实例，
+     * 用于「运行当前及下游」。范围为空表示整图运行。
+     */
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
+    public String createRunGraph(String wfId, String triggerType, Map<String, Object> params, String wfName,
+                                 String projectGroupId,
+                                 String scheduleJobId, String scheduleLogId,
+                                 String requestId, String bizDate,
+                                 String requestParams, String requestHash, LocalDateTime scheduledAt,
+                                 List<String> startCodes) {
         // 1) 幂等：同 (wfId, requestId) 已存在
         if (StrUtil.isNotBlank(requestId)) {
             List<WorkflowRun> existing = runMapper.selectList(new LambdaQueryWrapper<WorkflowRun>()
@@ -172,7 +191,8 @@ public class WorkflowRunner {
         if (nodes.isEmpty()) {
             throw new BusinessException("工作流未配置任何节点，无法运行");
         }
-        validateGraph(nodes, edges);
+        WorkflowGraphValidator.validate(nodes, edges);
+        List<WorkflowNode> scopedNodes = scopeNodes(nodes, edges, startCodes);
 
         LocalDateTime now = LocalDateTime.now();
         WorkflowRun run = new WorkflowRun();
@@ -207,7 +227,7 @@ public class WorkflowRunner {
         }
         String runId = run.getId();
 
-        for (WorkflowNode n : nodes) {
+        for (WorkflowNode n : scopedNodes) {
             WorkflowNodeRun nr = new WorkflowNodeRun();
             nr.setRunId(runId);
             nr.setWfId(wfId);
@@ -242,12 +262,54 @@ public class WorkflowRunner {
      * 提交 DAG 执行；执行器拒绝提交时保留可查询的失败终态并释放业务日锁，避免长期停在 PENDING。
      */
     public void executeAsync(String runId, String wfId, Map<String, Object> params, String bizDate) {
+        executeAsync(runId, wfId, params, bizDate, null);
+    }
+
+    public void executeAsync(String runId, String wfId, Map<String, Object> params, String bizDate,
+                             List<String> startCodes) {
         List<WorkflowNode> nodes = nodeMapper.selectList(new LambdaQueryWrapper<WorkflowNode>()
                 .eq(WorkflowNode::getWfId, wfId)
                 .orderByAsc(WorkflowNode::getCreateTime));
         List<WorkflowEdge> edges = edgeMapper.selectList(new LambdaQueryWrapper<WorkflowEdge>()
                 .eq(WorkflowEdge::getWfId, wfId));
-        submit(runId, nodes, edges, params, bizDate);
+        List<WorkflowNode> scoped = scopeNodes(nodes, edges, startCodes);
+        Set<String> kept = new HashSet<>();
+        scoped.forEach(node -> kept.add(node.getNodeCode()));
+        List<WorkflowEdge> scopedEdges = edges.stream()
+                .filter(edge -> kept.contains(edge.getFromCode()) && kept.contains(edge.getToCode()))
+                .toList();
+        submit(runId, scoped, scopedEdges, params, bizDate);
+    }
+
+    /** 计算运行范围：起始节点及其全部下游；startCodes 为空时返回整图。 */
+    private List<WorkflowNode> scopeNodes(List<WorkflowNode> nodes, List<WorkflowEdge> edges,
+                                          List<String> startCodes) {
+        if (startCodes == null || startCodes.isEmpty()) {
+            return nodes;
+        }
+        Set<String> existing = new HashSet<>();
+        nodes.forEach(node -> existing.add(node.getNodeCode()));
+        Set<String> selected = new HashSet<>();
+        for (String code : startCodes) {
+            if (code == null || !existing.contains(code)) {
+                throw new BusinessException("运行范围包含不存在的节点: " + code);
+            }
+            selected.add(code);
+        }
+        Map<String, List<String>> adjacency = new HashMap<>();
+        for (WorkflowEdge edge : edges) {
+            adjacency.computeIfAbsent(edge.getFromCode(), key -> new ArrayList<>()).add(edge.getToCode());
+        }
+        Queue<String> queue = new java.util.ArrayDeque<>(selected);
+        while (!queue.isEmpty()) {
+            String current = queue.poll();
+            for (String next : adjacency.getOrDefault(current, List.of())) {
+                if (selected.add(next)) {
+                    queue.offer(next);
+                }
+            }
+        }
+        return nodes.stream().filter(node -> selected.contains(node.getNodeCode())).toList();
     }
 
     private void submit(String runId, List<WorkflowNode> nodes, List<WorkflowEdge> edges,
@@ -436,6 +498,35 @@ public class WorkflowRunner {
             started.add(code);
         }
 
+        // 跳过与前置条件：都不实际执行节点，但仍释放下游依赖
+        if (node.getSkipFlag() != null && node.getSkipFlag() == 1) {
+            finishWithoutExecution(runId, code, nodeRun, "SKIPPED", null,
+                    "节点已配置「跳过执行」，直接释放下游", adj, remaining, ready, done,
+                    finished, latch, lock, false);
+            return;
+        }
+        if (StrUtil.isNotBlank(node.getPrecondition())) {
+            boolean passed;
+            try {
+                Map<String, Object> conditionParams = contextFactory.paramsFor(node, params);
+                if (StrUtil.isNotBlank(bizDate)) {
+                    conditionParams.put("bizDate", bizDate);
+                }
+                passed = PreconditionEvaluator.evaluate(node.getPrecondition(), conditionParams);
+            } catch (RuntimeException e) {
+                finishWithoutExecution(runId, code, nodeRun, "FAILED", truncate(e.getMessage(), 2000),
+                        "前置条件解析失败: " + e.getMessage(), adj, remaining, ready, done,
+                        finished, latch, lock, true);
+                return;
+            }
+            if (!passed) {
+                finishWithoutExecution(runId, code, nodeRun, "SKIPPED", null,
+                        "前置条件不满足，跳过执行: " + node.getPrecondition(), adj, remaining, ready, done,
+                        finished, latch, lock, false);
+                return;
+            }
+        }
+
         // 重试策略：最大尝试次数 = retryCount + 1，间隔 retryInterval 秒
         int maxAttempts = (node.getRetryCount() == null || node.getRetryCount() <= 0)
                 ? 1 : node.getRetryCount() + 1;
@@ -473,7 +564,7 @@ public class WorkflowRunner {
 
                 try {
                     NodeExecutor executor = executorFactory.get(node.getNodeType());
-                    result = executor.execute(buildContext(node, params, runId, nodeRun.getId(), bizDate));
+                    result = executor.execute(contextFactory.build(node, params, runId, nodeRun.getId(), bizDate));
                     ok = result != null && result.isSuccess();
                     if (ok) {
                         break;
@@ -539,16 +630,61 @@ public class WorkflowRunner {
 
         if (ok) {
             synchronized (lock) {
-                for (String to : adj.getOrDefault(code, List.of())) {
-                    if (done.contains(to)) {
-                        continue;
-                    }
-                    int rem = remaining.get(to) - 1;
-                    remaining.put(to, rem);
-                    if (rem == 0) {
-                        ready.offer(to);
-                    }
-                }
+                releaseDownstream(code, adj, remaining, ready, done);
+            }
+        }
+    }
+
+    /**
+     * 不实际执行节点，直接落一条终态记录并释放（或快速失败）下游。
+     * 用于「跳过执行」、前置条件不满足、前置条件解析失败三种场景。
+     */
+    private void finishWithoutExecution(String runId, String code, WorkflowNodeRun nodeRun,
+                                        String status, String error, String logText,
+                                        Map<String, List<String>> adj, Map<String, Integer> remaining,
+                                        Queue<String> ready, Set<String> done, AtomicInteger finished,
+                                        CountDownLatch latch, Object lock, boolean fail) {
+        synchronized (lock) {
+            if (done.contains(code)) {
+                return;
+            }
+            done.add(code);
+            LocalDateTime now = LocalDateTime.now();
+            nodeRun.setStatus(status);
+            nodeRun.setStartTime(now);
+            nodeRun.setEndTime(now);
+            nodeRun.setDurationMs(0L);
+            nodeRun.setLogText(truncate(logText, 4000));
+            if (error != null) {
+                nodeRun.setErrorMessage(error);
+            }
+            nodeRunMapper.updateById(nodeRun);
+            finished.incrementAndGet();
+            if (fail) {
+                // 未执行节点未进入 started，这里把 done 作为已处理集合传入即可
+                failFast(runId, adj, ready, done, done, finished, latch, lock);
+            } else {
+                releaseDownstream(code, adj, remaining, ready, done);
+            }
+            latch.countDown();
+        }
+    }
+
+    /** 节点成功后释放下游依赖：剩余依赖数归零的节点进入就绪队列。 */
+    private void releaseDownstream(String code, Map<String, List<String>> adj,
+                                   Map<String, Integer> remaining, Queue<String> ready, Set<String> done) {
+        for (String to : adj.getOrDefault(code, List.of())) {
+            if (done.contains(to)) {
+                continue;
+            }
+            Integer current = remaining.get(to);
+            if (current == null) {
+                continue;
+            }
+            int rem = current - 1;
+            remaining.put(to, rem);
+            if (rem == 0) {
+                ready.offer(to);
             }
         }
     }
@@ -576,104 +712,11 @@ public class WorkflowRunner {
         }
     }
 
-    /** 组装节点执行上下文并做 ${param} 替换；业务日期由运行上下文注入，节点静态参数不能改写 */
-    private NodeContext buildContext(WorkflowNode node, Map<String, Object> params,
-                                     String runId, String nodeRunId, String bizDate) {
-        Map<String, Object> config = new HashMap<>();
-        if (StrUtil.isNotBlank(node.getConfigJson())) {
-            JSONObject obj = JSONUtil.parseObj(node.getConfigJson());
-            config.putAll(obj);
-        }
-        String contentKey = NodeExecutorKeys.contentKey(node.getNodeType());
-        String content = contentKey == null ? null : resolveStr(String.valueOf(config.getOrDefault(contentKey, "")), params);
-        String datasourceId = resolveStr(String.valueOf(config.getOrDefault("datasourceId", "")), params);
-        return NodeContext.builder()
-                .node(node)
-                .content(content)
-                .datasourceId(StrUtil.isBlank(datasourceId) ? null : datasourceId)
-                .config(config)
-                .params(params)
-                .timeoutSeconds(node.getTimeout() == null || node.getTimeout() <= 0 ? null : (long) node.getTimeout())
-                .runId(runId)
-                .nodeRunId(nodeRunId)
-                .bizDate(bizDate)
-                .build();
-    }
-
-    /** DAG 环检测 */
-    private void validateGraph(List<WorkflowNode> nodes, List<WorkflowEdge> edges) {
-        Set<String> codes = new ConcurrentHashMap<String, Boolean>().newKeySet();
-        for (WorkflowNode n : nodes) {
-            codes.add(n.getNodeCode());
-        }
-        Map<String, Integer> indegree = new HashMap<>();
-        Map<String, List<String>> adj = new HashMap<>();
-        for (String c : codes) {
-            indegree.put(c, 0);
-            adj.put(c, new ArrayList<>());
-        }
-        for (WorkflowEdge e : edges) {
-            if (!codes.contains(e.getFromCode()) || !codes.contains(e.getToCode())) {
-                throw new BusinessException("连线引用了不存在的节点: " + e.getFromCode() + " -> " + e.getToCode());
-            }
-            adj.get(e.getFromCode()).add(e.getToCode());
-            indegree.put(e.getToCode(), indegree.get(e.getToCode()) + 1);
-        }
-        Queue<String> q = new java.util.ArrayDeque<>();
-        indegree.forEach((c, d) -> {
-            if (d == 0) {
-                q.offer(c);
-            }
-        });
-        int visited = 0;
-        while (!q.isEmpty()) {
-            String c = q.poll();
-            visited++;
-            for (String to : adj.get(c)) {
-                int d = indegree.get(to) - 1;
-                indegree.put(to, d);
-                if (d == 0) {
-                    q.offer(to);
-                }
-            }
-        }
-        if (visited != codes.size()) {
-            throw new BusinessException("工作流 DAG 存在环路，请检查连线");
-        }
-    }
-
-    /** ${param} 模板替换 */
-    private String resolveStr(String template, Map<String, Object> params) {
-        if (template == null || params == null || params.isEmpty()) {
-            return template;
-        }
-        String out = template;
-        for (Map.Entry<String, Object> e : params.entrySet()) {
-            out = out.replace("${" + e.getKey() + "}", String.valueOf(e.getValue()));
-        }
-        return out;
-    }
-
     /** 限制字符串长度 */
     private String truncate(String text, int maxLen) {
         if (text == null) {
             return null;
         }
         return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...";
-    }
-
-    private static class NodeExecutorKeys {
-        static String contentKey(String nodeType) {
-            switch (nodeType) {
-                case "SQL":
-                case "DATA_OP":
-                    return "sql";
-                case "SHELL":
-                case "PYTHON":
-                    return "script";
-                default:
-                    return null;
-            }
-        }
     }
 }

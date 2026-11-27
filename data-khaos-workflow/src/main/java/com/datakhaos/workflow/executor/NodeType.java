@@ -20,4 +20,8 @@ public final class NodeType {
     public static final String PIPELINE = "PIPELINE";
     /** 质量稽核节点（触发质量任务并阻塞门禁） */
     public static final String QUALITY = "QUALITY";
+    /** 延时器节点（等待固定秒数后继续） */
+    public static final String DELAY = "DELAY";
+    /** 嵌套任务流节点（触发子任务流并等待终态） */
+    public static final String NESTED = "NESTED";
 }

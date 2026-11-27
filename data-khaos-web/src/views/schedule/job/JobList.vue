@@ -26,27 +26,43 @@
 
     <el-table v-loading="loading" :data="list" border stripe>
       <el-table-column prop="jobName" label="任务名称" min-width="140" />
-      <el-table-column label="类型" width="100">
+      <el-table-column label="类型" width="130">
         <template #default="{ row }">
           <el-tag>{{ jobTypeText(row.jobType) }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="关联对象" min-width="170">
+        <template #default="{ row }">
+          <template v-if="row.jobType === 'WORKFLOW' || row.refType === 'WORKFLOW'">
+            <el-link v-if="row.refId" type="primary" @click="router.push(`/workflow/edit/${row.refId}`)">
+              {{ workflowName(row.refId) }}
+            </el-link>
+            <span v-else class="muted">未绑定工作流</span>
+          </template>
+          <span v-else-if="row.jobType === 'SYNC' || row.refType === 'PIPELINE'">
+            {{ pipelineName(row.refId) || row.refId || '未绑定同步任务' }}
+          </span>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="jobGroup" label="分组" min-width="110" />
       <el-table-column prop="cronExpression" label="Cron 表达式" min-width="130" />
-      <el-table-column prop="datasourceId" label="数据源ID" min-width="140" />
-      <el-table-column prop="targetTable" label="目标表" min-width="120" />
+      <el-table-column prop="targetTable" label="目标表" min-width="110" />
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
           <el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="updateTime" label="更新时间" width="170" />
-      <el-table-column label="操作" width="290" fixed="right">
+      <el-table-column label="操作" width="360" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button v-if="row.status !== 1" link type="success" @click="handleStart(row)">启用</el-button>
           <el-button v-else link type="warning" @click="handleStop(row)">停用</el-button>
           <el-button link type="info" @click="handleRun(row)">手动运行</el-button>
+          <el-button link type="primary" @click="openDeps(row)">依赖</el-button>
+          <el-button v-if="row.jobType === 'WORKFLOW' && row.refId" link type="primary"
+            @click="router.push(`/workflow/edit/${row.refId}`)">编排</el-button>
           <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -83,15 +99,34 @@
         <el-form-item label="Cron 表达式" prop="cronExpression">
           <el-input v-model="form.cronExpression" placeholder="如 0 0 2 * * ?" />
         </el-form-item>
-        <el-form-item label="数据源ID" prop="datasourceId">
-          <el-input v-model="form.datasourceId" placeholder="请输入数据源ID" />
+
+        <el-form-item v-if="form.jobType === 'WORKFLOW'" label="关联工作流">
+          <el-select v-model="form.refId" filterable placeholder="选择要调度的任务流" style="width: 100%">
+            <el-option v-for="workflow in workflowOptions" :key="workflow.id"
+              :label="workflow.name" :value="workflow.id!" />
+          </el-select>
+          <div class="field-hint">任务流内部 DAG 在「编排」中维护；此处只配置定时触发。</div>
         </el-form-item>
-        <el-form-item label="执行SQL" prop="targetSql">
-          <el-input v-model="form.targetSql" type="textarea" :rows="2" placeholder="请输入执行 SQL（可选）" />
+
+        <el-form-item v-else-if="form.jobType === 'SYNC'" label="关联同步任务">
+          <el-select v-model="form.refId" filterable placeholder="选择数据同步任务" style="width: 100%">
+            <el-option v-for="pipeline in pipelineOptions" :key="pipeline.id"
+              :label="pipeline.name ? `${pipeline.name} (${pipeline.id})` : pipeline.id" :value="pipeline.id" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="目标表" prop="targetTable">
-          <el-input v-model="form.targetTable" placeholder="请输入目标表" />
-        </el-form-item>
+
+        <template v-if="form.jobType === 'SQL'">
+          <el-form-item label="数据源ID" prop="datasourceId">
+            <el-input v-model="form.datasourceId" placeholder="请输入数据源ID" />
+          </el-form-item>
+          <el-form-item label="执行SQL" prop="targetSql">
+            <el-input v-model="form.targetSql" type="textarea" :rows="4" placeholder="请输入执行 SQL" />
+          </el-form-item>
+          <el-form-item label="目标表" prop="targetTable">
+            <el-input v-model="form.targetTable" placeholder="请输入目标表" />
+          </el-form-item>
+        </template>
+
         <el-form-item label="参数(JSON)" prop="params">
           <el-input v-model="form.params" type="textarea" :rows="2" :placeholder="paramsPlaceholder" />
         </el-form-item>
@@ -114,6 +149,41 @@
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="submit">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 任务依赖 -->
+    <el-dialog v-model="depVisible" :title="`任务依赖 · ${currentJob?.jobName || ''}`" width="640px">
+      <div class="dep-add">
+        <el-select v-model="depForm.depJobId" filterable placeholder="选择上游任务" style="flex: 1">
+          <el-option v-for="job in allJobs.filter(item => item.id !== currentJob?.id)" :key="job.id"
+            :label="job.jobName" :value="job.id!" />
+        </el-select>
+        <el-select v-model="depForm.depType" style="width: 120px">
+          <el-option label="HARD 强依赖" value="HARD" />
+          <el-option label="SOFT 弱依赖" value="SOFT" />
+        </el-select>
+        <el-button type="primary" :disabled="!depForm.depJobId" @click="addDep">添加</el-button>
+      </div>
+      <el-alert class="dep-hint" type="info" :closable="false" show-icon
+        title="HARD：上游任务成功后才触发当前任务；SOFT：只记录依赖关系，不阻断运行。" />
+      <el-table v-loading="depLoading" :data="depRows" size="small" border empty-text="暂无上游依赖">
+        <el-table-column label="上游任务" min-width="180">
+          <template #default="{ row }">{{ jobName(row.depJobId) }}</template>
+        </el-table-column>
+        <el-table-column label="依赖类型" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.depType === 'HARD' ? 'danger' : 'info'">{{ row.depType }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="80">
+          <template #default="{ row }">
+            <el-button link type="danger" size="small" @click="removeDep(row)">移除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button type="primary" @click="depVisible = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -157,26 +227,100 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
-import { useRoute } from 'vue-router'
-import { createJob, deleteJob, pageJobLogs, pageJobs, runJob, startJob, stopJob, updateJob } from '@/api/schedule'
-import type { ScheduleJob, ScheduleJobLog } from '@/types'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  createJob, deleteJob, deleteJobDep, listJobDeps, pageJobLogs, pageJobs, runJob, saveJobDep,
+  startJob, stopJob, updateJob,
+} from '@/api/schedule'
+import { pagePipelineTasks } from '@/api/pipeline'
+import { listWorkflowOptions } from '@/api/workflow'
+import type { ScheduleJob, ScheduleJobDep, ScheduleJobLog, WorkflowDef } from '@/types'
 
 const route = useRoute()
+const router = useRouter()
 
-const paramsPlaceholder = computed(() =>
-  form.jobType === 'QUALITY' ? '质量任务ID，如 {"taskId": "质量任务ID"}' : '如 {"batchSize": 1000}',
-)
+const paramsPlaceholder = computed(() => {
+  if (form.jobType === 'QUALITY') return '质量任务ID，如 {"taskId": "质量任务ID"}'
+  if (form.jobType === 'WORKFLOW') return '传给工作流的参数，如 {"bizDate": "2026-11-27"}'
+  if (form.jobType === 'SYNC') return '传给同步任务的参数，如 {"batchSize": 1000}'
+  return '如 {"batchSize": 1000}'
+})
 
 const jobTypes = [
+  { label: '工作流 WORKFLOW', value: 'WORKFLOW' },
   { label: '同步 SYNC', value: 'SYNC' },
   { label: 'SQL', value: 'SQL' },
   { label: '质量稽核 QUALITY', value: 'QUALITY' },
-  { label: '刷新 REFRESH', value: 'REFRESH' },
-  { label: '推送 PUSH', value: 'PUSH' },
 ]
+const legacyTypeLabels: Record<string, string> = {
+  REFRESH: '刷新 REFRESH（未接入）',
+  PUSH: '推送 PUSH（未接入）',
+}
 
 function jobTypeText(t?: string) {
-  return jobTypes.find((x) => x.value === t)?.label ?? t ?? '-'
+  return jobTypes.find((x) => x.value === t)?.label ?? legacyTypeLabels[t ?? ''] ?? t ?? '-'
+}
+
+const workflowOptions = ref<WorkflowDef[]>([])
+const pipelineOptions = ref<Array<{ id: string; name?: string }>>([])
+const allJobs = ref<ScheduleJob[]>([])
+const depVisible = ref(false)
+const depLoading = ref(false)
+const depRows = ref<ScheduleJobDep[]>([])
+const currentJob = ref<ScheduleJob>()
+const depForm = reactive<{ depJobId: string; depType: 'HARD' | 'SOFT' }>({ depJobId: '', depType: 'HARD' })
+
+async function loadOptions() {
+  try { workflowOptions.value = await listWorkflowOptions() } catch { workflowOptions.value = [] }
+  try {
+    const page = await pagePipelineTasks({ current: 1, size: 200 })
+    pipelineOptions.value = (page.records || []).map((row: any) => ({ id: row.id, name: row.taskName || row.name }))
+  } catch { pipelineOptions.value = [] }
+  try {
+    const page = await pageJobs({ current: 1, size: 500 })
+    allJobs.value = page.records
+  } catch { allJobs.value = [] }
+}
+
+function workflowName(id?: string) {
+  return workflowOptions.value.find(item => item.id === id)?.name || id || ''
+}
+function pipelineName(id?: string) {
+  return pipelineOptions.value.find(item => item.id === id)?.name || ''
+}
+
+async function openDeps(row: ScheduleJob) {
+  currentJob.value = row
+  depForm.depJobId = ''
+  depForm.depType = 'HARD'
+  depVisible.value = true
+  await loadOptions()
+  await loadDeps()
+}
+async function loadDeps() {
+  if (!currentJob.value?.id) return
+  depLoading.value = true
+  try {
+    depRows.value = await listJobDeps(currentJob.value.id)
+  } finally {
+    depLoading.value = false
+  }
+}
+function jobName(id?: string) {
+  return allJobs.value.find(job => job.id === id)?.jobName || id || ''
+}
+async function addDep() {
+  if (!currentJob.value?.id || !depForm.depJobId) return
+  await saveJobDep(currentJob.value.id, { depJobId: depForm.depJobId, depType: depForm.depType })
+  ElMessage.success('依赖已添加')
+  depForm.depJobId = ''
+  await loadDeps()
+}
+async function removeDep(dep: ScheduleJobDep) {
+  if (!dep.id) return
+  await deleteJobDep(dep.id)
+  ElMessage.success('依赖已移除')
+  await loadDeps()
 }
 
 const loading = ref(false)
@@ -236,18 +380,35 @@ function handleReset() {
 
 function openCreate() {
   isEdit.value = false
-  Object.assign(form, { jobName: '', jobType: 'SYNC', jobGroup: '', cronExpression: '', datasourceId: '', targetSql: '', targetTable: '', params: '', status: 0, retryCount: 0, retryInterval: 0, timeout: 60 })
+  Object.assign(form, {
+    jobName: '', jobType: 'WORKFLOW', jobGroup: '', cronExpression: '', datasourceId: '', targetSql: '',
+    targetTable: '', params: '', refType: 'WORKFLOW', refId: '', status: 0, retryCount: 0,
+    retryInterval: 0, timeout: 60,
+  })
   dialogVisible.value = true
 }
 
 function openEdit(row: ScheduleJob) {
   isEdit.value = true
   Object.assign(form, { ...row })
+  if (!form.refType) {
+    form.refType = form.jobType === 'WORKFLOW' ? 'WORKFLOW' : form.jobType === 'SYNC' ? 'PIPELINE' : undefined
+  }
   dialogVisible.value = true
 }
 
 async function submit() {
   await formRef.value?.validate()
+  if (form.jobType === 'WORKFLOW' && !form.refId) {
+    ElMessage.warning('请选择要调度的任务流')
+    return
+  }
+  if (form.jobType === 'SYNC' && !form.refId) {
+    ElMessage.warning('请选择要触发的同步任务')
+    return
+  }
+  form.refType = form.jobType === 'WORKFLOW' ? 'WORKFLOW'
+    : form.jobType === 'SYNC' ? 'PIPELINE' : undefined
   submitting.value = true
   try {
     if (isEdit.value) {
@@ -306,6 +467,7 @@ onMounted(() => {
     query.keyword = kw
     query.jobType = 'QUALITY'
   }
+  void loadOptions()
   load()
 })
 </script>
@@ -320,6 +482,9 @@ onMounted(() => {
 .log-bar {
   margin-top: 12px;
 }
+.field-hint { font-size: 12px; color: #98a2b3; line-height: 1.5; margin-top: 4px; }
+.dep-add { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.dep-hint { margin-bottom: 10px; }
 .pager {
   margin-top: 16px;
   justify-content: flex-end;

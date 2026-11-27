@@ -7,8 +7,9 @@
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="query.status" clearable placeholder="全部" style="width: 120px" @change="handleSearch">
+            <el-option label="已发布" :value="2" />
             <el-option label="启用" :value="1" />
-            <el-option label="禁用" :value="0" />
+            <el-option label="停用" :value="0" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -36,16 +37,18 @@
         </template>
       </el-table-column>
       <el-table-column prop="owner" label="负责人" width="110" />
-      <el-table-column label="状态" width="90">
+      <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '禁用' }}</el-tag>
+          <el-tag :type="row.status === 2 ? 'success' : row.status === 1 ? 'primary' : 'info'">
+            {{ row.status === 2 ? '已发布' : row.status === 1 ? '启用' : '停用' }}
+          </el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="updateTime" label="更新时间" width="170" />
       <el-table-column label="操作" width="340" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="router.push(`/workflow/edit/${row.id}`)">编排</el-button>
-          <el-button v-if="row.status !== 1" link type="success" @click="handleStart(row)">启用</el-button>
+          <el-button v-if="row.status === 0" link type="success" @click="handleStart(row)">启用</el-button>
           <el-button v-else link type="warning" @click="handleStop(row)">停用</el-button>
           <el-button link type="info" @click="handleRun(row)">运行</el-button>
           <el-button link type="primary" @click="openRunDialog(row.id)">记录</el-button>
@@ -199,7 +202,10 @@ function nodeStatusTag(s?: string): 'info' | 'warning' | 'success' | 'danger' {
   return 'warning'
 }
 function nodeTypeText(t?: string) {
-  return { SQL: 'SQL', SHELL: 'Shell', PYTHON: 'Python', DATA_OP: '数据算子' }[t ?? ''] ?? t ?? '-'
+  return {
+    SQL: 'SQL', SHELL: 'Shell', PYTHON: 'Python', DATA_OP: '数据算子',
+    PIPELINE: '数据同步', QUALITY: '数据质量', DELAY: '延时器', NESTED: '子任务流',
+  }[t ?? ''] ?? t ?? '-'
 }
 
 async function load() {

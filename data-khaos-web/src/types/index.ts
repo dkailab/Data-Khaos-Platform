@@ -1048,6 +1048,10 @@ export interface ScheduleJob {
   targetSql?: string
   targetTable?: string
   params?: string
+  /** 关联对象类型 WORKFLOW / PIPELINE */
+  refType?: string
+  /** 关联对象ID（工作流ID / 管道任务ID） */
+  refId?: string
   /** 0:停用 1:启用 */
   status?: number
   retryCount?: number
@@ -1252,12 +1256,16 @@ export interface WorkflowDef {
   name: string
   code?: string
   cronExpression?: string
-  /** 0:禁用/草稿 1:启用 */
+  /** 0:停用/下线 1:启用 2:已发布 */
   status?: number
   description?: string
   owner?: string
   /** 运行参数模板(JSON) */
   params?: string
+  /** 最近发布绑定的版本号 */
+  publishedRevision?: number
+  /** 最近发布时间 */
+  publishedAt?: string
   createTime?: string
   updateTime?: string
 }
@@ -1268,14 +1276,26 @@ export interface WorkflowNode {
   wfId?: string
   nodeCode: string
   nodeName: string
-  /** SQL / SHELL / PYTHON / DATA_OP */
+  /** 节点描述 */
+  description?: string
+  /** SQL / SHELL / PYTHON / DATA_OP / PIPELINE / QUALITY / DELAY / NESTED */
   nodeType: string
   configJson?: string
   posX?: number
   posY?: number
+  /** 超时（秒） */
   timeout?: number
   retryCount?: number
   retryInterval?: number
+  /** 是否跳过执行 0/1，跳过仍释放下游 */
+  skipFlag?: number
+  executorGroup?: string
+  /** 是否允许独立调度 0/1 */
+  independentSchedule?: number
+  /** 前置条件表达式 */
+  precondition?: string
+  /** 节点级参数(JSON) */
+  nodeParams?: string
 }
 
 /** 工作流依赖边 */
@@ -1292,6 +1312,77 @@ export interface WorkflowGraph {
   def: WorkflowDef
   nodes: WorkflowNode[]
   edges: WorkflowEdge[]
+}
+
+/** SQL 文件资源（草稿 + 发布快照） */
+export interface WorkflowSqlFile {
+  id?: string
+  projectId?: string
+  folder?: string
+  name: string
+  description?: string
+  datasourceId?: string
+  draftContent?: string
+  publishedContent?: string
+  draftVersion?: number
+  publishedVersion?: number
+  updatedBy?: string
+  updateTime?: string
+  createTime?: string
+}
+
+/** 跨任务流上游依赖 */
+export interface WorkflowUpstreamView {
+  id?: string
+  upstreamWfId: string
+  upstreamName?: string
+  upstreamCode?: string
+  upstreamStatus?: number
+  dependStrategy: 'STRICT' | 'LOOSE' | 'OFF'
+  paramMapping?: string
+  enabled: boolean
+}
+
+/** 跨任务流依赖图 */
+export interface WorkflowDependencyGraph {
+  rootWfId: string
+  depth: number
+  nodes: Array<{ wfId: string; name: string; code?: string; status?: number; level: number; root: boolean }>
+  edges: Array<{ fromWfId: string; toWfId: string; strategy: string }>
+}
+
+/** 任务列表项 */
+export interface WorkflowTaskView {
+  nodeCode: string
+  nodeName: string
+  nodeType: string
+  description?: string
+  timeoutSeconds: number
+  retryCount: number
+  skipped: boolean
+  independent: boolean
+  executorGroup?: string
+  lastStatus?: string
+  lastStartTime?: string
+  lastDurationMs?: number
+  lastErrorMessage?: string
+}
+
+/** 单节点调试结果 */
+export interface NodeDebugResult {
+  success: boolean
+  rows: number
+  durationMs: number
+  log?: string
+  error?: string
+}
+
+/** 发布结果 */
+export interface WorkflowPublishResult {
+  wfId: string
+  status: number
+  revisionNumber: number
+  publishedAt?: string
 }
 
 /** 工作流运行实例 */
