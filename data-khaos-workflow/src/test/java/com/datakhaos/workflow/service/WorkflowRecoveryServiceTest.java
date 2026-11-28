@@ -232,6 +232,27 @@ class WorkflowRecoveryServiceTest {
     }
 
     @Test
+    void ambiguousSubmitWithUnchangedFailureDoesNotAllowAnotherPost() {
+        client.timeoutWithoutObservedTransition = true;
+
+        assertEquals("UNKNOWN", service.recover("run-1", "node-run-1").status());
+        assertEquals("UNKNOWN", service.recover("run-1", "node-run-1").status());
+        assertEquals(1, client.posts.get());
+    }
+
+    @Test
+    void staleSubmittingDoesNotAllowAnotherPost() {
+        client.timeoutWithoutObservedTransition = true;
+        assertEquals("UNKNOWN", service.recover("run-1", "node-run-1").status());
+        WorkflowExternalRecovery entry = recoveries.get("node-run-1|START_FAILURE_TASK_PROCESS");
+        entry.setStatus("SUBMITTING");
+        entry.setUpdateTime(LocalDateTime.now().minusMinutes(10));
+
+        assertEquals("SUBMITTING", service.recover("run-1", "node-run-1").status());
+        assertEquals(1, client.posts.get());
+    }
+
+    @Test
     void pollSuccessMarksNodeAndResumesLocalDownstream() {
         client.state = "SUCCESS";
         WorkflowExternalRecovery recovery = new WorkflowExternalRecovery();
@@ -296,6 +317,7 @@ class WorkflowRecoveryServiceTest {
         private final AtomicInteger definitionQueries = new AtomicInteger();
         private volatile String state = "FAILURE";
         private volatile boolean submitThrows;
+        private volatile boolean timeoutWithoutObservedTransition;
         private volatile boolean rejectRecovery;
 
         FakeClient(ObjectMapper json) {
@@ -325,6 +347,9 @@ class WorkflowRecoveryServiceTest {
             if (rejectRecovery) {
                 throw new BusinessException(com.datakhaos.common.model.ResultCode.SYSTEM_ERROR,
                         "DolphinScheduler 拒绝恢复请求: offline");
+            }
+            if (timeoutWithoutObservedTransition) {
+                throw new IllegalStateException("timeout");
             }
             if (submitThrows) {
                 state = "RUNNING_EXECUTION";

@@ -146,7 +146,7 @@ public class WorkflowRecoveryService {
         } catch (RuntimeException e) {
             log.warn("DolphinScheduler 恢复提交结果不确定 nodeRunId={} instance={} error={}",
                     node.getId(), node.getRefId(), e.getMessage());
-            disambiguateAfterSubmit(recovery, context, binding);
+            disambiguateAfterSubmit(recovery, context, binding, recheck);
         }
         return latestView(recovery);
     }
@@ -211,7 +211,7 @@ public class WorkflowRecoveryService {
     }
 
     private void disambiguateAfterSubmit(WorkflowExternalRecovery recovery, Context context,
-                                         DolphinSchedulerBinding binding) {
+                                         DolphinSchedulerBinding binding, DolphinSchedulerClient.RemoteInstance before) {
         try {
             DolphinSchedulerClient.RemoteInstance after = client.queryInstance(binding, context.node.getRefId());
             String state = normalize(after.state());
@@ -220,8 +220,11 @@ public class WorkflowRecoveryService {
                 resumeLocal(recovery, context, "远端实例恢复成功");
             } else if (ACTIVE_STATES.contains(state)) {
                 markAccepted(recovery, after, "恢复请求结果不确定，远端实例已开始执行");
+            } else if (FAILURE_STATES.contains(state) && before.runTimes() != null
+                    && after.runTimes() != null && after.runTimes() > before.runTimes()) {
+                markFailed(recovery, after, "远端已执行恢复，但实例仍失败: " + state);
             } else {
-                markFailed(recovery, after, "恢复请求结果不确定，远端状态: " + display(state));
+                markUnknown(recovery, "恢复请求结果不确定，远端尚无新的执行证据，请核对原实例");
             }
         } catch (RuntimeException e) {
             markUnknown(recovery, "恢复请求结果不确定，请稍后核对远端实例状态");
@@ -395,11 +398,8 @@ public class WorkflowRecoveryService {
         WorkflowExternalRecovery existing = recoveryMapper.find(context.node.getId(), ACTION);
         if (existing != null) {
             String status = existing.getStatus();
-            if (ACCEPTED.equals(status) || POLLING.equals(status) || SUCCEEDED.equals(status)) {
-                return new Claim(existing, false);
-            }
-            if (SUBMITTING.equals(status) && existing.getUpdateTime() != null
-                    && existing.getUpdateTime().isAfter(LocalDateTime.now().minusMinutes(2))) {
+            // A timeout or an interrupted process is not proof that the remote POST was not applied.
+            if (Set.of(SUBMITTING, ACCEPTED, POLLING, SUCCEEDED, UNKNOWN).contains(status)) {
                 return new Claim(existing, false);
             }
             boolean claimed = recoveryMapper.update(null, Wrappers.<WorkflowExternalRecovery>lambdaUpdate()

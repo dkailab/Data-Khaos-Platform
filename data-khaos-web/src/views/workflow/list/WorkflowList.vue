@@ -381,7 +381,7 @@ function canRecover(row: WorkflowNodeRun) {
   if (run.runStatus !== 'FAILED' && run.runStatus !== 'RECOVERY_REQUIRED') return false
   const recovery = recoveries.value[row.id!]
   if (!recovery) return true
-  return !['SUBMITTING', 'ACCEPTED', 'POLLING', 'SUCCEEDED'].includes(recovery.status ?? '')
+  return !['SUBMITTING', 'ACCEPTED', 'POLLING', 'SUCCEEDED', 'UNKNOWN'].includes(recovery.status ?? '')
 }
 
 function stopRecoveryPolling() {
