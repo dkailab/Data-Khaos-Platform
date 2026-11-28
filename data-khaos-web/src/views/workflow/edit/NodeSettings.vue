@@ -98,6 +98,18 @@ const delaySeconds = computed({
   get: () => cfg('delaySeconds', 60),
   set: (value: number) => setCfg('delaySeconds', value),
 })
+const dsRemoteProjectCode = computed({
+  get: () => String(cfg('remoteProjectCode', '')),
+  set: (value: string) => setCfg('remoteProjectCode', value.trim()),
+})
+const dsRemoteDefinitionCode = computed({
+  get: () => String(cfg('remoteDefinitionCode', '')),
+  set: (value: string) => setCfg('remoteDefinitionCode', value.trim()),
+})
+const dsRemoteDefinitionVersion = computed({
+  get: () => String(cfg('remoteDefinitionVersion', '')),
+  set: (value: string) => setCfg('remoteDefinitionVersion', value.trim() === '' ? '' : Number(value)),
+})
 
 /* 文件列表不携带正文，选中后按 id 拉取详情，避免资源树接口过大 */
 const fileDetail = ref<WorkflowSqlFile>()
@@ -419,6 +431,20 @@ function saveAsFile() {
             </el-form-item>
           </template>
 
+          <template v-else-if="meta.contentKind === 'dolphinscheduler'">
+            <el-form-item label="DolphinScheduler 项目编码">
+              <el-input v-model="dsRemoteProjectCode" placeholder="远端项目编码" />
+            </el-form-item>
+            <el-form-item label="工作流定义编码">
+              <el-input v-model="dsRemoteDefinitionCode" placeholder="远端已上线的工作流定义编码" />
+            </el-form-item>
+            <el-form-item label="定义版本">
+              <el-input v-model="dsRemoteDefinitionVersion" placeholder="留空表示接受远端当前上线版本" />
+              <div class="hint">
+                按业务日期提交远端 DAG。填写版本后，远端上线版本不一致时拒绝提交；发布后的草稿修改不影响已受理运行。
+              </div>
+            </el-form-item>
+          </template>
           <template v-else-if="meta.contentKind === 'delay'">
             <el-form-item label="延时秒数">
               <el-input-number v-model="delaySeconds" :min="0" :max="86400" controls-position="right" />

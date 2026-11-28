@@ -1424,7 +1424,28 @@ export interface WorkflowNodeRun {
   endTime?: string
   durationMs?: number
   resultRows?: number
+  refType?: string
+  refId?: string
+  refContext?: string
   logText?: string
   errorMessage?: string
   createTime?: string
+}
+
+/** DolphinScheduler 失败节点恢复记录 */
+export interface WorkflowRecovery {
+  runId?: string
+  nodeRunId?: string
+  action?: string
+  status?: 'SUBMITTING' | 'ACCEPTED' | 'POLLING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'
+  remoteProjectCode?: number
+  remoteInstanceId?: number
+  remoteStateBefore?: string
+  remoteStateAfter?: string
+  remoteRunTimes?: number
+  operatorId?: string
+  localResumeStatus?: string
+  message?: string
+  createTime?: string
+  updateTime?: string
 }

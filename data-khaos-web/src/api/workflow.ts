@@ -1,8 +1,8 @@
 import { del, get, post, put } from './request'
 import type {
   NodeDebugResult, PageResult, WorkflowDef, WorkflowDependencyGraph, WorkflowGraph, WorkflowNodeRun,
-  WorkflowPublishResult, WorkflowRevision, WorkflowRun, WorkflowSqlFile, WorkflowTaskView,
-  WorkflowUpstreamView,
+  WorkflowPublishResult, WorkflowRecovery, WorkflowRevision, WorkflowRun, WorkflowSqlFile,
+  WorkflowTaskView, WorkflowUpstreamView,
 } from '@/types'
 
 /** 保存工作流图（新增/整体更新） */
@@ -48,6 +48,20 @@ export function getWorkflowRun(runId: string) {
 /** 某次运行的节点执行记录 */
 export function listWorkflowRunNodes(runId: string) {
   return get<WorkflowNodeRun[]>(`/workflow/run/${runId}/nodes`)
+}
+
+export function getDolphinSchedulerNodeState(runId: string, nodeRunId: string) {
+  return get<string>(`/workflow/run/${runId}/nodes/${nodeRunId}/dolphinscheduler-state`)
+}
+
+/** 从失败的 DolphinScheduler 节点恢复；远端实例编号保持不变。 */
+export function recoverDolphinSchedulerNode(runId: string, nodeRunId: string) {
+  return post<WorkflowRecovery>(`/workflow/run/${runId}/nodes/${nodeRunId}/recover`)
+}
+
+/** 最近一次 DolphinScheduler 恢复记录 */
+export function getDolphinSchedulerRecovery(runId: string, nodeRunId: string) {
+  return get<WorkflowRecovery | null>(`/workflow/run/${runId}/nodes/${nodeRunId}/recovery`)
 }
 
 export function pageWorkflowRevisions(id: string, current: number, size: number) {

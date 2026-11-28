@@ -106,7 +106,7 @@
     </el-dialog>
 
     <!-- 节点执行明细对话框 -->
-    <el-dialog v-model="nodeDialogVisible" title="节点执行明细" width="900px" destroy-on-close>
+    <el-dialog v-model="nodeDialogVisible" title="节点执行明细" width="min(1040px, 95vw)" destroy-on-close>
       <el-table v-loading="nodeLoading" :data="nodeRuns" border stripe size="small">
         <el-table-column prop="nodeName" label="节点" min-width="130" />
         <el-table-column label="类型" width="100">
@@ -122,6 +122,44 @@
         <el-table-column prop="durationMs" label="耗时(ms)" width="90" />
         <el-table-column prop="resultRows" label="行数" width="70" />
         <el-table-column prop="errorMessage" label="错误" min-width="140" show-overflow-tooltip />
+        <el-table-column v-if="nodeRuns.some(node => node.nodeType === 'DOLPHINSCHEDULER')"
+          label="DolphinScheduler 实例" min-width="200">
+          <template #default="{ row }">
+            <template v-if="row.refType === 'DOLPHINSCHEDULER' && row.refId === 'SUBMITTING'">
+              <el-tag size="small" type="warning">待核查</el-tag>
+              <span class="external-run-help">按节点运行 ID {{ row.id }} 核对远端提交</span>
+            </template>
+            <template v-else-if="row.refType === 'DOLPHINSCHEDULER' && row.refId">
+              <span>#{{ row.refId }}</span>
+              <el-button link type="primary" :loading="externalLoading[row.id]"
+                @click="refreshExternalState(row)">查状态</el-button>
+              <span v-if="externalStates[row.id]" class="external-run-help">
+                远端状态：{{ externalStates[row.id] }}
+              </span>
+              <template v-if="recoveries[row.id]">
+                <span class="external-run-help">
+                  恢复：{{ recoveryStatusText(recoveries[row.id]!.status) }}
+                  <template v-if="recoveries[row.id]!.remoteStateAfter">
+                    · 远端节点 {{ recoveries[row.id]!.remoteStateAfter }}
+                  </template>
+                </span>
+                <span class="external-run-help">
+                  本地工作流：{{ localResumeText(recoveries[row.id]!.localResumeStatus) }}
+                </span>
+                <span v-if="recoveries[row.id]!.message" class="external-run-help"
+                  :title="recoveries[row.id]!.message">
+                  {{ recoveries[row.id]!.message }}
+                </span>
+              </template>
+              <span v-if="recoveryErrors[row.id]" class="external-run-help external-run-error">
+                {{ recoveryErrors[row.id] }}
+              </span>
+              <el-button v-if="canRecover(row)" link type="warning" :loading="recoveryLoading[row.id]"
+                @click="handleRecover(row)">从失败节点恢复</el-button>
+            </template>
+            <span v-else>—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="日志" width="80">
           <template #default="{ row }">
             <el-button link type="primary" @click="openLog(row)">日志</el-button>
@@ -138,19 +176,22 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { DataLine, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import {
   deleteWorkflow,
+  getDolphinSchedulerNodeState,
+  getDolphinSchedulerRecovery,
   listWorkflowRunNodes,
   pageWorkflowRuns,
   pageWorkflows,
+  recoverDolphinSchedulerNode,
   triggerWorkflow,
   updateWorkflowStatus,
 } from '@/api/workflow'
-import type { WorkflowDef, WorkflowNodeRun, WorkflowRun } from '@/types'
+import type { WorkflowDef, WorkflowNodeRun, WorkflowRecovery, WorkflowRun } from '@/types'
 import WorkflowRevisionDialog from './WorkflowRevisionDialog.vue'
 
 const router = useRouter()
@@ -179,6 +220,13 @@ const runQuery = reactive<Record<string, any>>({ current: 1, size: 10, wfId: '' 
 const nodeDialogVisible = ref(false)
 const nodeLoading = ref(false)
 const nodeRuns = ref<WorkflowNodeRun[]>([])
+const externalStates = ref<Record<string, string>>({})
+const externalLoading = ref<Record<string, boolean>>({})
+const currentRun = ref<WorkflowRun | null>(null)
+const recoveries = ref<Record<string, WorkflowRecovery | null>>({})
+const recoveryLoading = ref<Record<string, boolean>>({})
+const recoveryErrors = ref<Record<string, string>>({})
+let recoveryPollTimer: ReturnType<typeof setInterval> | null = null
 
 const logDialogVisible = ref(false)
 const currentLog = ref('')
@@ -204,6 +252,7 @@ function nodeStatusTag(s?: string): 'info' | 'warning' | 'success' | 'danger' {
 function nodeTypeText(t?: string) {
   return {
     SQL: 'SQL', SHELL: 'Shell', PYTHON: 'Python', DATA_OP: '数据算子',
+    DOLPHINSCHEDULER: 'DolphinScheduler',
     PIPELINE: '数据同步', QUALITY: '数据质量', DELAY: '延时器', NESTED: '子任务流',
   }[t ?? ''] ?? t ?? '-'
 }
@@ -266,15 +315,142 @@ async function loadRuns() {
     runLoading.value = false
   }
 }
+function resetNodeDialog() {
+  nodeRuns.value = []
+  externalStates.value = {}
+  externalLoading.value = {}
+  recoveries.value = {}
+  recoveryLoading.value = {}
+  recoveryErrors.value = {}
+  currentRun.value = null
+  stopRecoveryPolling()
+}
+
 async function openRunDetail(row: WorkflowRun) {
+  resetNodeDialog()
+  currentRun.value = row
   nodeDialogVisible.value = true
-  nodeLoading.value = true
+  await reloadNodeRuns()
+  void loadRecoveries()
+}
+
+async function reloadNodeRuns(silent = false) {
+  const run = currentRun.value
+  if (!run?.id) return
+  if (!silent) nodeLoading.value = true
   try {
-    nodeRuns.value = await listWorkflowRunNodes(row.id!)
+    nodeRuns.value = await listWorkflowRunNodes(run.id)
   } finally {
-    nodeLoading.value = false
+    if (!silent) nodeLoading.value = false
   }
 }
+
+function isBoundDolphinNode(row: WorkflowNodeRun) {
+  return row.nodeType === 'DOLPHINSCHEDULER' && row.refType === 'DOLPHINSCHEDULER'
+    && !!row.refId && /^[1-9][0-9]*$/.test(row.refId)
+}
+
+async function loadRecoveries() {
+  const run = currentRun.value
+  if (!run?.id) return
+  const rows = nodeRuns.value.filter(isBoundDolphinNode)
+  for (const row of rows) {
+    try {
+      recoveries.value[row.id!] = await getDolphinSchedulerRecovery(run.id, row.id!)
+    } catch {
+      // 全局请求拦截器已提示；保留上一次结果，不把查询失败当成无记录
+    }
+  }
+}
+
+function recoveryStatusText(status?: string) {
+  return {
+    SUBMITTING: '提交中', ACCEPTED: '已受理', POLLING: '等待远端终态',
+    SUCCEEDED: '远端已恢复', FAILED: '恢复失败', UNKNOWN: '待核查',
+  }[status ?? ''] ?? status ?? '-'
+}
+function localResumeText(status?: string) {
+  return {
+    RESUMING: '续跑中', COMPLETED: '已完成', RESUME_FAILED: '续跑失败，待核查',
+  }[status ?? ''] ?? (status ? status : '未开始续跑')
+}
+
+function canRecover(row: WorkflowNodeRun) {
+  const run = currentRun.value
+  if (!run?.id || !isBoundDolphinNode(row) || row.status !== 'FAILED') return false
+  if (run.runStatus !== 'FAILED' && run.runStatus !== 'RECOVERY_REQUIRED') return false
+  const recovery = recoveries.value[row.id!]
+  if (!recovery) return true
+  return !['SUBMITTING', 'ACCEPTED', 'POLLING', 'SUCCEEDED'].includes(recovery.status ?? '')
+}
+
+function stopRecoveryPolling() {
+  if (recoveryPollTimer !== null) {
+    clearInterval(recoveryPollTimer)
+    recoveryPollTimer = null
+  }
+}
+
+function hasPendingRecovery() {
+  return Object.values(recoveries.value).some(recovery =>
+    !!recovery && (['SUBMITTING', 'ACCEPTED', 'POLLING'].includes(recovery.status ?? '')
+      || recovery.localResumeStatus === 'RESUMING'))
+}
+
+function startRecoveryPolling() {
+  if (recoveryPollTimer !== null) return
+  recoveryPollTimer = setInterval(async () => {
+    if (!nodeDialogVisible.value || !hasPendingRecovery()) {
+      stopRecoveryPolling()
+      return
+    }
+    await loadRecoveries()
+    await reloadNodeRuns(true)
+  }, 5000)
+}
+
+async function handleRecover(row: WorkflowNodeRun) {
+  const run = currentRun.value
+  if (!run?.id || !row.id) return
+  await ElMessageBox.confirm(
+    `将对远端实例 #${row.refId} 执行「从失败节点恢复」。实例编号不变，且不创建新的远端实例。确认继续吗？`,
+    '从失败节点恢复',
+    { type: 'warning' },
+  )
+  recoveryLoading.value[row.id] = true
+  delete recoveryErrors.value[row.id]
+  try {
+    recoveries.value[row.id] = await recoverDolphinSchedulerNode(run.id, row.id)
+    ElMessage.success('恢复请求已提交，正在跟踪远端结果')
+    startRecoveryPolling()
+  } catch (error) {
+    recoveryErrors.value[row.id] = error instanceof Error ? error.message : '恢复请求被拒绝'
+  } finally {
+    delete recoveryLoading.value[row.id]
+  }
+}
+
+async function refreshExternalState(row: WorkflowNodeRun) {
+  const { id, runId } = row
+  if (!id || !runId) return
+  const states = externalStates.value
+  const loading = externalLoading.value
+  delete states[id]
+  loading[id] = true
+  try {
+    states[id] = await getDolphinSchedulerNodeState(runId, id)
+  } catch {
+    states[id] = '查询失败，可重试'
+  } finally {
+    delete loading[id]
+  }
+}
+
+watch(nodeDialogVisible, visible => {
+  if (!visible) stopRecoveryPolling()
+})
+onUnmounted(stopRecoveryPolling)
+
 function openLog(row: WorkflowNodeRun) {
   currentLog.value = row.logText || '(无日志)'
   logDialogVisible.value = true
@@ -284,6 +460,16 @@ onMounted(load)
 </script>
 
 <style scoped>
+.external-run-help {
+  display: block;
+  color: var(--el-text-color-secondary);
+  overflow-wrap: anywhere;
+}
+
+.external-run-error {
+  color: var(--el-color-danger);
+}
+
 .toolbar {
   display: flex;
   justify-content: space-between;

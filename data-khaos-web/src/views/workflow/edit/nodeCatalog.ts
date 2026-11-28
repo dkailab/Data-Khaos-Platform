@@ -1,6 +1,6 @@
 import type { WorkflowNode } from '@/types'
 
-export type NodeContentKind = 'sql' | 'script' | 'pipeline' | 'quality' | 'delay' | 'nested'
+export type NodeContentKind = 'sql' | 'script' | 'pipeline' | 'quality' | 'delay' | 'nested' | 'dolphinscheduler'
 
 export interface NodeTypeMeta {
   type: string
@@ -29,6 +29,8 @@ export const NODE_TYPES: NodeTypeMeta[] = [
     icon: 'CircleCheck', description: '触发质量稽核并按门禁阻断下游', contentKind: 'quality' },
   { type: 'NESTED', label: '嵌套任务流', group: '其他', color: '#215dba', soft: '#e7f0ff',
     icon: 'Share', description: '触发另一个任务流并等待终态', contentKind: 'nested' },
+  { type: 'DOLPHINSCHEDULER', label: 'DolphinScheduler', group: '其他', color: '#215dba', soft: '#e7f0ff',
+    icon: 'Share', description: '运行管理员绑定的离线 DAG', contentKind: 'dolphinscheduler' },
   { type: 'DELAY', label: '延时器', group: '其他', color: '#667085', soft: '#f2f4f7',
     icon: 'Clock', description: '等待指定秒数后继续', contentKind: 'delay' },
 ]
@@ -58,6 +60,8 @@ export function defaultConfig(type: string): Record<string, any> {
       return { qualityTaskId: '', gate: 'BLOCK' }
     case 'nested':
       return { workflowId: '' }
+    case 'dolphinscheduler':
+      return {}
     case 'delay':
       return { delaySeconds: 60 }
     default:
