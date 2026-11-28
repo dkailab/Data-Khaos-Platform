@@ -163,7 +163,7 @@
                         size="small"
                         effect="plain"
                       >{{ row.type }}</el-tag>
-                      <span v-else :class="{ 'idx-used': col.columnName === 'key' && row.key, 'idx-none': col.columnName === 'key' && !row.key }">{{ row[col.columnName] }}</span>
+                      <span v-else-if="col.columnName" :class="{ 'idx-used': col.columnName === 'key' && row.key, 'idx-none': col.columnName === 'key' && !row.key }">{{ row[col.columnName] }}</span>
                     </template>
                   </el-table-column>
                 </el-table>
