@@ -15,6 +15,9 @@ name: data-khaos
 #     DM8 时，把 MYSQL_HOST 相关环境变量替换为 DM8 连接即可。
 #   - 应用容器未配置健康检查（镜像精简），依赖 infra 健康检查 +
 #     restart: on-failure 自动拉起。
+#   - 业务服务必须等 Nacos readiness 就绪后再启动，并关闭注册 fail-fast：
+#     Nacos 2.x 的 gRPC(9848) 握手在资源紧张时可能超过 3s，若注册失败即
+#     终止应用，会出现「注册失败→重启→再失败」的启动风暴和网关 502。
 # ============================================================
 
 x-app-common: &app-common
@@ -30,6 +33,9 @@ x-app-common: &app-common
     MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
     MYSQL_PASSWORD: ${MYSQL_PASSWORD:-root123456}
     NACOS_ADDR: ${NACOS_ADDR:-nacos:8848}
+    # 注册失败不终止应用启动：Nacos 客户端会在后台重试注册，
+    # 避免 gRPC 握手慢导致 Spring context 启动失败 → 容器反复重启。
+    SPRING_CLOUD_NACOS_DISCOVERY_FAIL_FAST: "false"
     REDIS_HOST: ${REDIS_HOST:-redis}
     REDIS_PORT: ${REDIS_PORT:-6379}
     REDIS_PASSWORD: ${REDIS_PASSWORD:-}
@@ -43,7 +49,7 @@ x-app-common: &app-common
     redis:
       condition: service_healthy
     nacos:
-      condition: service_started
+      condition: service_healthy
 
 services:
   # ---------- 基础设施 ----------
@@ -130,6 +136,14 @@ services:
       - "9848:9848"   # Nacos 2.x gRPC 端口（服务发现必需）
     volumes:
       - nacos-data:/home/nacos/data
+    healthcheck:
+      # readiness 通过才算真正就绪（HTTP 8848 + gRPC 9848 均可用），
+      # 业务服务依赖此健康状态启动，避免注册竞态。
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8848/nacos/v1/console/health/readiness | grep -q OK"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
     restart: unless-stopped
     networks:
       - dk-net
