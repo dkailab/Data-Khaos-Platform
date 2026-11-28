@@ -108,8 +108,8 @@ public class DolphinSchedulerClient {
         JsonNode response = post("/projects/" + binding.projectCode() + "/executors/execute", form);
         if (response == null || response.path("code").asInt(-1) != 0) {
             String message = response == null ? "" : response.path("msg").asText("");
-            throw new IllegalStateException(StrUtil.isBlank(message)
-                    ? "DolphinScheduler 拒绝恢复请求" : message);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, StrUtil.isBlank(message)
+                    ? "DolphinScheduler 拒绝恢复请求" : "DolphinScheduler 拒绝恢复请求: " + message);
         }
     }
 
@@ -126,8 +126,10 @@ public class DolphinSchedulerClient {
         try {
             return client.post().uri(path).body(form).retrieve().body(JsonNode.class);
         } catch (RuntimeException e) {
-            log.warn("DolphinScheduler POST 失败 path={} error={}", path, e.getMessage());
-            throw unavailable();
+            // 写请求在网络层失败时无法判断远端是否已受理，必须区别于 API 明确拒绝，
+            // 否则调用方会把确定失败误当作需要人工核查的不确定提交。
+            log.warn("DolphinScheduler POST 结果不确定 path={} error={}", path, e.getMessage());
+            throw new SubmissionUnconfirmedException("DolphinScheduler 提交结果不确定，请稍后核对");
         }
     }
 
@@ -148,6 +150,13 @@ public class DolphinSchedulerClient {
 
     private BusinessException unavailable() {
         return new BusinessException(ResultCode.SYSTEM_ERROR, "DolphinScheduler 暂不可用，请稍后重试");
+    }
+
+    /** 写请求结果不确定：远端可能已受理，禁止直接重试提交。 */
+    public static class SubmissionUnconfirmedException extends RuntimeException {
+        public SubmissionUnconfirmedException(String message) {
+            super(message);
+        }
     }
 
     public record RemoteInstance(String state, Integer runTimes) {

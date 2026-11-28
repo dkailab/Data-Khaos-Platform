@@ -140,6 +140,9 @@ public class WorkflowRecoveryService {
         try {
             client.recoverFailure(binding, node.getRefId());
             markAccepted(recovery, recheck, "恢复请求已提交，等待远端执行");
+        } catch (BusinessException e) {
+            // 远端明确拒绝，无需再核查实例状态，也不用等待超时。
+            markFailed(recovery, recheck, e.getMessage());
         } catch (RuntimeException e) {
             log.warn("DolphinScheduler 恢复提交结果不确定 nodeRunId={} instance={} error={}",
                     node.getId(), node.getRefId(), e.getMessage());

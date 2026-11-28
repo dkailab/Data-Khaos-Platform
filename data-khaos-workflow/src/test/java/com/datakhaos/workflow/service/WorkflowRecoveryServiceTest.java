@@ -209,6 +209,19 @@ class WorkflowRecoveryServiceTest {
     }
 
     @Test
+    void explicitRecoveryRejectionIsRecordedWithoutExtraStateProbe() {
+        client.state = "FAILURE";
+        client.rejectRecovery = true;
+        var result = service.recover("run-1", "node-run-1");
+        assertEquals("FAILED", result.status());
+        assertTrue(result.message().contains("拒绝恢复请求"));
+        assertEquals(1, client.posts.get());
+        // 提交前一次 + 提交前复查一次；明确拒绝不再追加核查查询。
+        assertEquals(2, client.instanceQueries.get());
+        assertEquals(0, lifecycle.prepared.get());
+    }
+
+    @Test
     void uncertainSubmitWithRunningRemoteIsAcceptedWithoutDuplicatePost() {
         client.state = "FAILURE";
         client.submitThrows = true;
@@ -283,6 +296,7 @@ class WorkflowRecoveryServiceTest {
         private final AtomicInteger definitionQueries = new AtomicInteger();
         private volatile String state = "FAILURE";
         private volatile boolean submitThrows;
+        private volatile boolean rejectRecovery;
 
         FakeClient(ObjectMapper json) {
             super(json, "", "");
@@ -308,6 +322,10 @@ class WorkflowRecoveryServiceTest {
         @Override
         public void recoverFailure(DolphinSchedulerBinding binding, String instanceId) {
             posts.incrementAndGet();
+            if (rejectRecovery) {
+                throw new BusinessException(com.datakhaos.common.model.ResultCode.SYSTEM_ERROR,
+                        "DolphinScheduler 拒绝恢复请求: offline");
+            }
             if (submitThrows) {
                 state = "RUNNING_EXECUTION";
                 throw new IllegalStateException("timeout");

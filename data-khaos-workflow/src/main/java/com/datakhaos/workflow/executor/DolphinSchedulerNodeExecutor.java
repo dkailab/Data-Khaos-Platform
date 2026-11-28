@@ -151,7 +151,16 @@ public class DolphinSchedulerNodeExecutor implements NodeExecutor {
                 throw new IllegalStateException("DolphinScheduler 实例关联写入失败");
             }
             return externalId;
+        } catch (BusinessException e) {
+            // API 明确拒绝：远端没有受理，释放提交预占，允许修正配置后重新运行。
+            runs.update(null, Wrappers.<WorkflowNodeRun>lambdaUpdate()
+                    .eq(WorkflowNodeRun::getId, run.getId())
+                    .eq(WorkflowNodeRun::getRefId, SUBMITTING)
+                    .set(WorkflowNodeRun::getRefId, null)
+                    .set(WorkflowNodeRun::getRefType, null));
+            throw e;
         } catch (Exception e) {
+            // 网络层、响应解析或关联写入失败时远端可能已受理，保留 SUBMITTING 供人工核查。
             throw new UnconfirmedExecutionException("DolphinScheduler 提交未确认，节点运行 ID " + run.getId());
         }
     }

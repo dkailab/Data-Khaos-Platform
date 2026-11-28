@@ -31,6 +31,7 @@ class DolphinSchedulerNodeExecutorTest {
     private final AtomicInteger posts = new AtomicInteger();
     private final AtomicInteger gets = new AtomicInteger();
     private final AtomicInteger recoveries = new AtomicInteger();
+    private final AtomicInteger updates = new AtomicInteger();
     private final AtomicReference<String> form = new AtomicReference<>();
     private final AtomicReference<String> recoveryForm = new AtomicReference<>();
     private volatile String response = "{\"code\":0,\"data\":[17]}";
@@ -70,6 +71,7 @@ class DolphinSchedulerNodeExecutorTest {
                 (proxy, method, args) -> switch (method.getName()) {
                     case "selectById" -> run;
                     case "update" -> {
+                        updates.incrementAndGet();
                         run.setRefType(NodeType.DOLPHINSCHEDULER);
                         run.setRefId(run.getRefId() == null ? "SUBMITTING" : "17");
                         yield 1;
@@ -117,6 +119,18 @@ class DolphinSchedulerNodeExecutorTest {
                 () -> executor.execute(context("2026-11-28")));
         assertEquals(1, posts.get());
         assertEquals(0, gets.get());
+    }
+
+    @Test
+    void explicitApiRejectionIsNotTreatedAsUnconfirmedSubmission() {
+        response = "{\"code\":500,\"msg\":\"workflow definition offline\"}";
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> executor.execute(context("2026-11-28")));
+        assertTrue(error.getMessage().contains("definition offline"));
+        assertEquals(1, posts.get());
+        assertEquals(0, gets.get());
+        // 领取预占 + 释放预占；明确拒绝不应保留 SUBMITTING 等待人工核查。
+        assertEquals(2, updates.get());
     }
 
     @Test
