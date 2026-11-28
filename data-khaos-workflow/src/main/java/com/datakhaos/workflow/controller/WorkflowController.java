@@ -8,9 +8,11 @@ import com.datakhaos.workflow.dto.BackfillResult;
 import com.datakhaos.workflow.dto.RunAccept;
 import com.datakhaos.workflow.dto.RunRequest;
 import com.datakhaos.workflow.dto.WorkflowGraphRequest;
+import com.datakhaos.workflow.dto.WorkflowRecoveryView;
 import com.datakhaos.workflow.entity.WorkflowDef;
 import com.datakhaos.workflow.entity.WorkflowNodeRun;
 import com.datakhaos.workflow.entity.WorkflowRun;
+import com.datakhaos.workflow.service.WorkflowRecoveryService;
 import com.datakhaos.workflow.service.WorkflowService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -37,6 +39,7 @@ import java.util.Map;
 public class WorkflowController {
 
     private final WorkflowService workflowService;
+    private final WorkflowRecoveryService recoveryService;
 
     /** 保存工作流图（新增/整体更新） */
     @PostMapping
@@ -147,5 +150,22 @@ public class WorkflowController {
     @GetMapping("/run/{runId}/nodes")
     public R<List<WorkflowNodeRun>> runNodes(@PathVariable String runId) {
         return R.ok(workflowService.nodeRuns(runId));
+    }
+
+    @GetMapping("/run/{runId}/nodes/{nodeRunId}/dolphinscheduler-state")
+    public R<String> dolphinSchedulerState(@PathVariable String runId, @PathVariable String nodeRunId) {
+        return R.ok(workflowService.dolphinSchedulerState(runId, nodeRunId));
+    }
+
+    /** 从失败的 DolphinScheduler 节点恢复；远端实例编号保持不变。 */
+    @PostMapping("/run/{runId}/nodes/{nodeRunId}/recover")
+    public R<WorkflowRecoveryView> recover(@PathVariable String runId, @PathVariable String nodeRunId) {
+        return R.ok(recoveryService.recover(runId, nodeRunId));
+    }
+
+    /** 最近一次恢复记录；尚未恢复时返回空数据。 */
+    @GetMapping("/run/{runId}/nodes/{nodeRunId}/recovery")
+    public R<WorkflowRecoveryView> recovery(@PathVariable String runId, @PathVariable String nodeRunId) {
+        return R.ok(recoveryService.latest(runId, nodeRunId));
     }
 }

@@ -13,4 +13,10 @@ public interface WorkflowRevisionMapper extends BaseMapper<WorkflowRevision> {
             WHERE wf_id = #{wfId} ORDER BY revision_number DESC LIMIT 1
             """)
     Integer latestNumber(@Param("wfId") String wfId);
+
+    @Select("""
+            SELECT graph_json FROM workflow_revision
+            WHERE wf_id = #{wfId} AND revision_number = #{revisionNumber} LIMIT 1
+            """)
+    String graphJson(@Param("wfId") String wfId, @Param("revisionNumber") Integer revisionNumber);
 }

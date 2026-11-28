@@ -87,6 +87,10 @@ services:
       - ../db/migrate-warehouse-api-credentials.sql:/docker-entrypoint-initdb.d/35-warehouse-api-credentials.sql:ro
       - ../db/migrate-warehouse-api-apps.sql:/docker-entrypoint-initdb.d/36-warehouse-api-apps.sql:ro
       - ../db/migrate-warehouse-api-realtime.sql:/docker-entrypoint-initdb.d/37-warehouse-api-realtime.sql:ro
+      - ../db/migrate-workflow-studio.sql:/docker-entrypoint-initdb.d/38-workflow-studio.sql:ro
+      - ../db/migrate-flink-lineage.sql:/docker-entrypoint-initdb.d/39-flink-lineage.sql:ro
+      - ../db/migrate-pipeline-count-metric.sql:/docker-entrypoint-initdb.d/40-pipeline-count-metric.sql:ro
+      - ../db/migrate-workflow-dolphinscheduler.sql:/docker-entrypoint-initdb.d/41-workflow-dolphinscheduler.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
@@ -305,6 +309,12 @@ services:
       <<: *app-env
       DATA_KHAOS_WORKFLOW_RECOVERY_ENABLED: ${WORKFLOW_RECOVERY_ENABLED:-true}
       DATA_KHAOS_WORKFLOW_RECOVERY_TIMEOUT_SECONDS: ${WORKFLOW_RECOVERY_TIMEOUT_SECONDS:-300}
+      WORKFLOW_DOLPHINSCHEDULER_BASE_URL: ${WORKFLOW_DOLPHINSCHEDULER_BASE_URL:-}
+      WORKFLOW_DOLPHINSCHEDULER_TOKEN: ${WORKFLOW_DOLPHINSCHEDULER_TOKEN:-}
+      WORKFLOW_DOLPHINSCHEDULER_WORKFLOW_ID: ${WORKFLOW_DOLPHINSCHEDULER_WORKFLOW_ID:-}
+      WORKFLOW_DOLPHINSCHEDULER_NODE_CODE: ${WORKFLOW_DOLPHINSCHEDULER_NODE_CODE:-}
+      WORKFLOW_DOLPHINSCHEDULER_PROJECT_CODE: ${WORKFLOW_DOLPHINSCHEDULER_PROJECT_CODE:-0}
+      WORKFLOW_DOLPHINSCHEDULER_DEFINITION_CODE: ${WORKFLOW_DOLPHINSCHEDULER_DEFINITION_CODE:-0}
       FLINK_RUN_PROJECT_ID: ${FLINK_RUN_PROJECT_ID:-}
       FLINK_RUN_SQL_GATEWAY: ${FLINK_RUN_SQL_GATEWAY:-}
       FLINK_RUN_JOBMANAGER: ${FLINK_RUN_JOBMANAGER:-}

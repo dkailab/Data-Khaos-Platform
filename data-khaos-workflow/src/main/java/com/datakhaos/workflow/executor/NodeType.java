@@ -24,4 +24,5 @@ public final class NodeType {
     public static final String DELAY = "DELAY";
     /** 嵌套任务流节点（触发子任务流并等待终态） */
     public static final String NESTED = "NESTED";
+    public static final String DOLPHINSCHEDULER = "DOLPHINSCHEDULER";
 }

@@ -91,6 +91,76 @@ public class WorkflowRunLifecycle {
         }
     }
 
+    /**
+     * 远端恢复成功后，将本地的失败运行重新置为 RUNNING，准备续跑未执行的下游。
+     * 只接受 FAILED / RECOVERY_REQUIRED，避免与仍在执行的运行并发。
+     */
+    @Transactional
+    public boolean prepareResume(String runId, LocalDateTime now) {
+        return jdbc.update("""
+                UPDATE workflow_run
+                SET run_status = 'RUNNING', heartbeat_at = ?, end_time = NULL, duration_ms = 0,
+                    error_message = NULL, recovery_code = NULL
+                WHERE id = ? AND run_status IN ('FAILED', 'RECOVERY_REQUIRED')
+                """, now, runId) == 1;
+    }
+
+    /** 仅重置失败快速跳过且从未开始的节点；配置跳过/前置条件跳过保留原状态。 */
+    @Transactional
+    public int resetSkippedNodes(String runId, List<String> nodeCodes, LocalDateTime now) {
+        if (nodeCodes == null || nodeCodes.isEmpty()) {
+            return 0;
+        }
+        String placeholders = String.join(",", java.util.Collections.nCopies(nodeCodes.size(), "?"));
+        Object[] args = new Object[nodeCodes.size() + 1];
+        args[0] = runId;
+        for (int i = 0; i < nodeCodes.size(); i++) {
+            args[i + 1] = nodeCodes.get(i);
+        }
+        return jdbc.update("""
+                UPDATE workflow_node_run
+                SET status = 'PENDING', start_time = NULL, end_time = NULL, duration_ms = 0,
+                    error_message = NULL, log_text = NULL
+                WHERE run_id = ? AND node_code IN (%s)
+                  AND status = 'SKIPPED' AND end_time IS NULL
+                  AND (log_text IS NULL OR log_text = '')
+                """.formatted(placeholders), args);
+    }
+
+    /** 远端实例恢复成功后回写本地节点终态；耗时由调用方按节点开始时间计算。 */
+    @Transactional
+    public int markNodeRecovered(String nodeRunId, String logText, long durationMs, LocalDateTime now) {
+        return jdbc.update("""
+                UPDATE workflow_node_run
+                SET status = 'SUCCESS', end_time = ?, duration_ms = ?,
+                    log_text = ?, error_message = NULL
+                WHERE id = ? AND status IN ('FAILED', 'RUNNING', 'PENDING', 'SUCCESS')
+                """, now, Math.max(durationMs, 0), logText, nodeRunId);
+    }
+
+    /** 远端已成功但没有需要续跑的下游，直接收敛本地运行。 */
+    @Transactional
+    public void completeAfterRecovery(String runId, String reason, long duration, LocalDateTime now) {
+        if (jdbc.update("""
+                UPDATE workflow_run
+                SET run_status = 'SUCCESS', error_message = ?, duration_ms = ?, end_time = ?, recovery_code = NULL
+                WHERE id = ? AND run_status = 'RUNNING'
+                """, reason, duration, now, runId) == 1) {
+            release(runId);
+        }
+    }
+
+    /** 远端已成功但本地下游续跑无法提交：保留待核查，避免误报成功。 */
+    @Transactional
+    public void failResume(String runId, String reason, LocalDateTime now) {
+        jdbc.update("""
+                UPDATE workflow_run
+                SET run_status = 'RECOVERY_REQUIRED', error_message = ?, end_time = ?,
+                    recovery_code = 'LOCAL_RESUME_FAILED'
+                WHERE id = ? AND run_status = 'RUNNING'
+                """, reason, now, runId);
+    }
+
     private void skipPending(String runId, LocalDateTime now) {
         jdbc.update("""
                 UPDATE workflow_node_run SET status = 'SKIPPED', end_time = ?

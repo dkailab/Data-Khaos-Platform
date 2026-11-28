@@ -107,7 +107,7 @@ class WorkflowProjectAccessTest {
                 return params;
             }
         };
-        service = new WorkflowService(definitions, null, null, null, runner, access, batches, upstreams);
+        service = new WorkflowService(definitions, null, null, null, runner, access, batches, upstreams, null, null);
     }
 
     @Test

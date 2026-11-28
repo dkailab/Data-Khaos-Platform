@@ -60,6 +60,9 @@ public class WorkflowNodeRun implements Serializable {
     /** 关联外部实例ID，如 pipeline_instance.id */
     private String refId;
 
+    /** 外部实例运行上下文(JSON)：远端项目、定义编码/版本、运行时节点归属 */
+    private String refContext;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 }

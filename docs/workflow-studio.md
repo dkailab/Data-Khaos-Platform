@@ -205,3 +205,33 @@ UUID 跨保存稳定、任务列表、单节点调试、整图运行、跳过/�
 - 发布后再编辑会直接修改当前图（发布版本号仍指向旧快照），后续可引入「发布后编辑自动转草稿」；
 - 上游依赖图最多展开 5 层，防止大图查询放大；
 - SQL 文件正文上限 100 万字符，单文件列表最多 500 条。
+
+## 10. DolphinScheduler 离线 DAG 试点
+
+试点对接 Apache DolphinScheduler 3.4.3。先在 DolphinScheduler 创建并上线一个等价离线 DAG，配置业务日期参数 `bizDate` 和运行关联参数 `dataKhaosNodeRunId`。由 Data Khaos 负责触发时，该 DAG 应保持无独立定时计划，避免同一批任务由两端同时调度。
+
+在 Data Khaos 工作台的试点工作流中添加 DolphinScheduler 节点，在节点设置里填写远端项目编码、工作流定义编码和定义版本。定义版本留空时接受远端当前上线版本；填写后，远端上线版本不一致时拒绝提交，避免启动接口解析到另一个定义。映射随发布快照固化：按 V1 发起的运行在草稿编辑或 V2 发布后仍定位到 V1 的远端定义，重查和恢复也读取当次运行保存的映射。
+
+部署时通过下列环境变量提供服务端连接信息和凭据。项目内映射优先，环境变量回退只用于旧版单节点试点，且会在运行记录中标记为 legacy：
+
+| 配置 | 值 |
+| --- | --- |
+| `WORKFLOW_DOLPHINSCHEDULER_BASE_URL` | DolphinScheduler API 根地址，包含部署路径前缀（如 `https://scheduler.example/dolphinscheduler`） |
+| `WORKFLOW_DOLPHINSCHEDULER_TOKEN` | 仅有试点项目权限的服务凭据 |
+| `WORKFLOW_DOLPHINSCHEDULER_WORKFLOW_ID` | 旧版试点绑定的 Data Khaos 工作流 ID |
+| `WORKFLOW_DOLPHINSCHEDULER_NODE_CODE` | 旧版试点绑定的节点编码 |
+| `WORKFLOW_DOLPHINSCHEDULER_PROJECT_CODE` | 旧版试点绑定的 DolphinScheduler 项目编码 |
+| `WORKFLOW_DOLPHINSCHEDULER_DEFINITION_CODE` | 旧版试点绑定的 DolphinScheduler 工作流定义编码 |
+| `WORKFLOW_DOLPHINSCHEDULER_DEFINITION_VERSION` | 旧版试点绑定的定义版本，可选 |
+
+使用带业务日期的手动运行或区间补数入口。区间补数按 Data Khaos 的日期拆分规则，每日启动一个远端实例。相同请求 ID 重发沿用现有幂等规则。在单次节点运行内，执行器先预占提交，再保存远端实例 ID 并轮询状态。同一节点运行的再次执行读取同一个实例。远端明确失败时由 DolphinScheduler 负责任务级重试。本地收到不确定结果时进入待恢复，可按节点运行 ID 查远端；人工核对是否已执行写入后再决定是否重新触发。
+
+验收使用同一个 DAG 检查正常运行、两日补数、同一请求重发、远端任务失败，以及远端已接收但本地未收到提交响应。节点日志和远端取消仍在 DolphinScheduler 操作。
+
+绑定无生产写入的测试 DAG 后，可用 `bash scripts/verify-dolphinscheduler-pilot.sh` 验证两日补数和同键重放。脚本读取本地节点记录与 DolphinScheduler 实例状态；所需环境变量见脚本。试点环境要给 MySQL 和 DolphinScheduler 留足内存，避免远端负载保护让任务长时间排队。脚本只覆盖正常补数，失败恢复需用含可恢复失败节点的试点 DAG 单独验证。
+
+默认 Compose 会为新 MySQL 数据卷执行工作流工作台、Flink 表血缘、链路计数和 DolphinScheduler 迁移。存量卷升级时执行 `mysql -uroot -p data_khaos < db/upgrade-workflow-dolphinscheduler.sql`，该脚本可重复执行，只补缺失的列和表；启动容器不会重新运行已有数据卷的初始化脚本。升级前先备份，并核对既有工作流定义和运行记录仍可读取。
+
+运行详情中的 DolphinScheduler 列显示远端实例编号。点击「查状态」读取远端当前状态，页面同时保留本地运行状态。提交响应不确定时，使用页面显示的节点运行 ID 在远端核查 `dataKhaosNodeRunId`。状态查询需要当前工作流项目的开发权限，适用于已绑定的试点节点。
+
+失败运行可在同一明细页执行「从失败节点恢复」。入口只对已关联远端实例、本地节点状态为 FAILED 的运行开放，需要当前项目开发权限；提交前会重新核对远端实例状态，运行中执行中、已成功、未关联或结果未知的实例会被明确拒绝或转入待核查。恢复使用 `START_FAILURE_TASK_PROCESS`，实例编号不变，也不会创建新实例。页面分别显示远端节点结果和本地工作流续跑结果：远端成功后才把节点回写为成功，并通过工作流执行器续跑未执行的下游；下游尚未完成时，总体运行状态不会提前标为成功。重复点击、并发提交和响应超时由唯一恢复记录和远端状态复查处理，审计记录保留操作人、时间、实例编号和结果。

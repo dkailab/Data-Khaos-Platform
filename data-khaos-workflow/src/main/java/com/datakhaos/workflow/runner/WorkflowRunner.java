@@ -10,6 +10,7 @@ import com.datakhaos.workflow.entity.WorkflowEdge;
 import com.datakhaos.workflow.entity.WorkflowNode;
 import com.datakhaos.workflow.entity.WorkflowNodeRun;
 import com.datakhaos.workflow.entity.WorkflowRun;
+import com.datakhaos.workflow.executor.DolphinSchedulerNodeExecutor.UnconfirmedExecutionException;
 import com.datakhaos.workflow.executor.ExecResult;
 import com.datakhaos.workflow.executor.NodeExecutor;
 import com.datakhaos.workflow.executor.NodeExecutorFactory;
@@ -155,6 +156,21 @@ public class WorkflowRunner {
                                  String requestId, String bizDate,
                                  String requestParams, String requestHash, LocalDateTime scheduledAt,
                                  List<String> startCodes) {
+        return createRunGraph(wfId, triggerType, params, wfName, projectGroupId, scheduleJobId, scheduleLogId,
+                requestId, bizDate, requestParams, requestHash, scheduledAt, startCodes, Map.of());
+    }
+
+    /**
+     * 带运行范围与外部运行时映射的受理。refContexts 由发布快照解析，
+     * 写入节点运行记录后不再受后续草稿编辑影响。
+     */
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
+    public String createRunGraph(String wfId, String triggerType, Map<String, Object> params, String wfName,
+                                 String projectGroupId,
+                                 String scheduleJobId, String scheduleLogId,
+                                 String requestId, String bizDate,
+                                 String requestParams, String requestHash, LocalDateTime scheduledAt,
+                                 List<String> startCodes, Map<String, String> refContexts) {
         // 1) 幂等：同 (wfId, requestId) 已存在
         if (StrUtil.isNotBlank(requestId)) {
             List<WorkflowRun> existing = runMapper.selectList(new LambdaQueryWrapper<WorkflowRun>()
@@ -236,6 +252,9 @@ public class WorkflowRunner {
             nr.setNodeType(n.getNodeType());
             nr.setStatus("PENDING");
             nr.setCreateTime(now);
+            if (refContexts != null) {
+                nr.setRefContext(refContexts.get(n.getNodeCode()));
+            }
             nodeRunMapper.insert(nr);
         }
 
@@ -279,6 +298,50 @@ public class WorkflowRunner {
                 .filter(edge -> kept.contains(edge.getFromCode()) && kept.contains(edge.getToCode()))
                 .toList();
         submit(runId, scoped, scopedEdges, params, bizDate);
+    }
+
+    /**
+     * 恢复远端成功后，从本地已有节点状态继续执行：已终态节点不重跑，
+     * 仅调度被重置为 PENDING 的下游节点。调用前运行状态已由 lifecycle 置为 RUNNING。
+     */
+    public void resumeAsync(String runId, String wfId, Map<String, Object> params, String bizDate,
+                            Set<String> resumeScope) {
+        List<WorkflowNodeRun> existing = nodeRuns(runId);
+        Set<String> runCodes = new HashSet<>();
+        existing.forEach(node -> runCodes.add(node.getNodeCode()));
+        Set<String> scheduling = new HashSet<>();
+        for (String code : runCodes) {
+            if (resumeScope == null || resumeScope.contains(code)) {
+                scheduling.add(code);
+            }
+        }
+        List<WorkflowNode> nodes = nodeMapper.selectList(new LambdaQueryWrapper<WorkflowNode>()
+                        .eq(WorkflowNode::getWfId, wfId)
+                        .orderByAsc(WorkflowNode::getCreateTime))
+                .stream().filter(node -> scheduling.contains(node.getNodeCode())).toList();
+        List<WorkflowEdge> edges = edgeMapper.selectList(new LambdaQueryWrapper<WorkflowEdge>()
+                        .eq(WorkflowEdge::getWfId, wfId))
+                .stream().filter(edge -> scheduling.contains(edge.getFromCode())
+                        && scheduling.contains(edge.getToCode())).toList();
+        if (nodes.isEmpty()) {
+            lifecycle.failResume(runId, "恢复后未找到可续跑的本地节点", LocalDateTime.now());
+            return;
+        }
+        try {
+            graphExecutor.execute(() -> {
+                activeGraphs.add(runId);
+                try {
+                    executeGraph(runId, nodes, edges, params, bizDate, scheduling);
+                } catch (Throwable e) {
+                    log.error("本地恢复续跑失败 runId={}", runId, e);
+                    lifecycle.failResume(runId, "远端已成功，但本地下游续跑失败，请核查", LocalDateTime.now());
+                } finally {
+                    activeGraphs.remove(runId);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            lifecycle.failResume(runId, "远端已成功，但本地续跑队列无法受理", LocalDateTime.now());
+        }
     }
 
     /** 计算运行范围：起始节点及其全部下游；startCodes 为空时返回整图。 */
@@ -401,8 +464,22 @@ public class WorkflowRunner {
 
     private void executeGraph(String runId, List<WorkflowNode> nodes, List<WorkflowEdge> edges,
                               Map<String, Object> params, String bizDate) {
+        executeGraph(runId, nodes, edges, params, bizDate, null);
+    }
+
+    /**
+     * 执行 DAG。schedulingScope 非空时只调度该范围内的节点（恢复续跑），
+     * 范围外节点保留原状态，但最终运行状态仍按全部节点计算。
+     */
+    private void executeGraph(String runId, List<WorkflowNode> nodes, List<WorkflowEdge> edges,
+                              Map<String, Object> params, String bizDate, Set<String> schedulingScope) {
+        List<WorkflowNode> scheduledNodes = schedulingScope == null ? nodes : nodes.stream()
+                .filter(node -> schedulingScope.contains(node.getNodeCode())).toList();
+        List<WorkflowEdge> scheduledEdges = schedulingScope == null ? edges : edges.stream()
+                .filter(edge -> schedulingScope.contains(edge.getFromCode())
+                        && schedulingScope.contains(edge.getToCode())).toList();
         Map<String, WorkflowNode> nodeMap = new HashMap<>();
-        for (WorkflowNode n : nodes) {
+        for (WorkflowNode n : scheduledNodes) {
             nodeMap.put(n.getNodeCode(), n);
         }
         Map<String, WorkflowNodeRun> nodeRuns = new LinkedHashMap<>();
@@ -414,11 +491,11 @@ public class WorkflowRunner {
         // 邻接表 + 剩余依赖数
         Map<String, List<String>> adj = new HashMap<>();
         Map<String, Integer> remaining = new ConcurrentHashMap<>();
-        for (WorkflowNode n : nodes) {
+        for (WorkflowNode n : scheduledNodes) {
             adj.put(n.getNodeCode(), new ArrayList<>());
             remaining.put(n.getNodeCode(), 0);
         }
-        for (WorkflowEdge e : edges) {
+        for (WorkflowEdge e : scheduledEdges) {
             adj.get(e.getFromCode()).add(e.getToCode());
             remaining.put(e.getToCode(), remaining.get(e.getToCode()) + 1);
         }
@@ -428,19 +505,30 @@ public class WorkflowRunner {
         AtomicBoolean interrupted = new AtomicBoolean();
         Set<String> started = ConcurrentHashMap.newKeySet();
         AtomicInteger finished = new AtomicInteger(0);
-        CountDownLatch latch = new CountDownLatch(nodes.size());
         Object lock = new Object();
 
-        // 根节点入队
+        // 恢复续跑时已有终态节点不重跑；初始完成数只统计本次调度范围，避免重复计数。
+        for (WorkflowNodeRun run : nodeRuns.values()) {
+            if (adj.containsKey(run.getNodeCode()) && isTerminal(run.getStatus())) {
+                done.add(run.getNodeCode());
+                finished.incrementAndGet();
+            }
+        }
+        CountDownLatch latch = new CountDownLatch(Math.max(0, scheduledNodes.size() - done.size()));
+
+        // 先释放已完成节点的下游依赖，再入队剩余根节点
         Queue<String> ready = new LinkedBlockingQueue<>();
+        for (String code : done) {
+            releaseDownstream(code, adj, remaining, ready, done);
+        }
         remaining.forEach((code, r) -> {
-            if (r == 0) {
+            if (r == 0 && !done.contains(code) && !ready.contains(code)) {
                 ready.offer(code);
             }
         });
 
         // 主循环：调度就绪节点；失败则快速失败
-        while (!interrupted.get() && finished.get() < nodes.size()) {
+        while (!interrupted.get() && finished.get() < scheduledNodes.size()) {
             if (!ready.isEmpty()) {
                 String code = ready.poll();
                 nodeTaskExecutor.execute(() -> {
@@ -571,7 +659,8 @@ public class WorkflowRunner {
                     }
                     errMsg = "节点执行失败（退出码非 0）";
                     log.warn("节点执行失败，将重试 node={} attempt={}/{}", node.getNodeName(), attempt + 1, maxAttempts);
-                } catch (PipelineApiClient.SubmissionUnconfirmedException e) {
+                } catch (PipelineApiClient.SubmissionUnconfirmedException
+                         | UnconfirmedExecutionException e) {
                     unconfirmed.set(true);
                     errMsg = truncate(e.getMessage(), 2000);
                     break;
@@ -710,6 +799,11 @@ public class WorkflowRunner {
                 latch.countDown();
             }
         }
+    }
+
+    /** 续跑时直接视为已完成、不再调度的节点状态；FAILED 保留给快速失败路径处理。 */
+    private boolean isTerminal(String status) {
+        return "SUCCESS".equals(status) || "SKIPPED".equals(status);
     }
 
     /** 限制字符串长度 */

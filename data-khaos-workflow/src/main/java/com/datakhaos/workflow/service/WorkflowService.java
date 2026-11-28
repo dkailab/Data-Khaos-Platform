@@ -23,6 +23,7 @@ import com.datakhaos.workflow.mapper.WorkflowDefMapper;
 import com.datakhaos.workflow.mapper.WorkflowEdgeMapper;
 import com.datakhaos.workflow.mapper.WorkflowNodeMapper;
 import com.datakhaos.workflow.mapper.WorkflowRunMapper;
+import com.datakhaos.workflow.executor.DolphinSchedulerNodeExecutor;
 import com.datakhaos.workflow.runner.WorkflowRunner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +37,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.TreeMap;
 
 /**
@@ -54,6 +56,8 @@ public class WorkflowService {
     private final WorkflowProjectAccess projectAccess;
     private final WorkflowBackfillBatchMapper backfillBatchMapper;
     private final WorkflowUpstreamService upstreamService;
+    private final DolphinSchedulerNodeExecutor dolphinScheduler;
+    private final DolphinSchedulerBindingResolver dolphinBindings;
 
     private static final String DEVELOP = "task:develop";
     private static final String SCHEDULE = "task:schedule";
@@ -240,7 +244,13 @@ public class WorkflowService {
     }
 
     public WorkflowRun runDetail(String runId) {
-        return runMapper.selectById(runId);
+        WorkflowRun run = runMapper.selectById(runId);
+        WorkflowDef def = run == null ? null : defMapper.selectById(run.getWfId());
+        if (def == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "运行实例不存在或不可访问");
+        }
+        projectAccess.requireAction(def.getProjectId(), DEVELOP);
+        return run;
     }
 
     /** 参与定时调度的任务流：启用（1）与已发布（2）都算；下线/停用（0）不参与。 */
@@ -292,9 +302,34 @@ public class WorkflowService {
         return nodes.stream().map(node -> WorkflowTaskView.of(node, lastRuns.get(node.getNodeCode()))).toList();
     }
 
-    /** 节点运行记录（按运行实例） */
+    /** 节点运行记录（按运行实例，校验当前项目开发权限） */
     public List<com.datakhaos.workflow.entity.WorkflowNodeRun> nodeRuns(String runId) {
+        WorkflowRun run = runMapper.selectById(runId);
+        WorkflowDef def = run == null ? null : defMapper.selectById(run.getWfId());
+        if (def == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "运行实例不存在或不可访问");
+        }
+        projectAccess.requireAction(def.getProjectId(), DEVELOP);
+        if (StrUtil.isNotBlank(run.getProjectGroupId()) && !Objects.equals(def.getProjectId(), run.getProjectGroupId())) {
+            projectAccess.requireAction(run.getProjectGroupId(), DEVELOP);
+        }
         return workflowRunner.nodeRuns(runId);
+    }
+
+    public String dolphinSchedulerState(String runId, String nodeRunId) {
+        WorkflowRun run = runMapper.selectById(runId);
+        WorkflowDef def = run == null ? null : defMapper.selectById(run.getWfId());
+        if (def == null || StrUtil.isBlank(def.getProjectId())) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "节点运行不存在或不可访问");
+        }
+        projectAccess.requireAction(def.getProjectId(), DEVELOP);
+        if (StrUtil.isNotBlank(run.getProjectGroupId()) && !Objects.equals(def.getProjectId(), run.getProjectGroupId())) {
+            projectAccess.requireAction(run.getProjectGroupId(), DEVELOP);
+        }
+        WorkflowNodeRun node = workflowRunner.nodeRuns(runId).stream()
+                .filter(item -> nodeRunId.equals(item.getId()) && run.getWfId().equals(item.getWfId()))
+                .findFirst().orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "节点运行不存在或不可访问"));
+        return dolphinScheduler.queryState(node);
     }
 
     /** 触发工作流运行（runner 内部异步执行） */
@@ -533,9 +568,21 @@ public class WorkflowService {
                                String scheduleJobId, String scheduleLogId, LocalDateTime scheduledAt,
                                java.util.List<String> startCodes) {
         try {
-            String runId = workflowRunner.createRunGraph(def.getId(), triggerType, effective, def.getName(),
-                    def.getProjectId(), scheduleJobId, scheduleLogId, requestId, bizDate, norm, hash, scheduledAt,
-                    startCodes);
+            Map<String, String> refContexts = Map.of();
+            if (dolphinBindings != null) {
+                List<WorkflowNode> nodes = nodeMapper.selectList(new LambdaQueryWrapper<WorkflowNode>()
+                        .eq(WorkflowNode::getWfId, def.getId()));
+                refContexts = dolphinBindings.resolveForRun(def, nodes);
+            }
+            // 没有外部运行时映射时沿用原有受理入口，保持非试点工作流的既有契约；
+            // 只有 DolphinScheduler 节点才走带 refContext 的重载。
+            String runId = refContexts.isEmpty()
+                    ? workflowRunner.createRunGraph(def.getId(), triggerType, effective, def.getName(),
+                            def.getProjectId(), scheduleJobId, scheduleLogId, requestId, bizDate, norm, hash,
+                            scheduledAt, startCodes)
+                    : workflowRunner.createRunGraph(def.getId(), triggerType, effective, def.getName(),
+                            def.getProjectId(), scheduleJobId, scheduleLogId, requestId, bizDate, norm, hash,
+                            scheduledAt, startCodes, refContexts);
             workflowRunner.executeAsync(runId, def.getId(), effective, bizDate, startCodes);
             return RunAccept.accepted(runId, bizDate);
         } catch (WorkflowRunner.RunRejectedException e) {
