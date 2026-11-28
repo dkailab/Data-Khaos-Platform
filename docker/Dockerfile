@@ -92,8 +92,11 @@ COPY --from=build /workspace/${MODULE}/target/${MODULE}-1.0.0-SNAPSHOT.jar /app/
 # datax.py 默认用系统 java（JDK17），需替换为 JDK8 才能正常跑 hdfsreader。
 
 # 工作流编排需要执行 Python 脚本节点，运行时镜像补充 python3（仅 workflow 需要）
+# 国内网络访问 ports.ubuntu.com(ARM 官方源)常超时数分钟，先换阿里云镜像源再安装，
+# 否则构建会卡在 python3 安装，导致只能退回不含 python3 的临时运行镜像。
 RUN if [ "${MODULE}" = "data-khaos-workflow" ]; then \
-      apt-get update \
+      sed -i 's|http://ports.ubuntu.com/ubuntu-ports|https://mirrors.aliyun.com/ubuntu-ports|g' /etc/apt/sources.list \
+      && apt-get update \
       && apt-get install -y --no-install-recommends python3 bash \
       && ln -sf /usr/bin/python3 /usr/local/bin/python \
       && rm -rf /var/lib/apt/lists/*; \
